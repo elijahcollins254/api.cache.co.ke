@@ -93,6 +93,7 @@ class Order(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     estimated_delivery = models.DateTimeField(null=True, blank=True)
     delivered_at = models.DateTimeField(null=True, blank=True)  # helpful to record real delivery time
+    delivery_code = models.CharField(max_length=4, null=True, blank=True)
     delivery_code_hash = models.CharField(max_length=128, null=True, blank=True)
     delivery_code_sent_at = models.DateTimeField(null=True, blank=True)
     gate_notified_at = models.DateTimeField(null=True, blank=True)
@@ -457,9 +458,10 @@ class Order(models.Model):
     def generate_delivery_code(self):
         """Generate a 4-digit customer delivery code and store its hash."""
         code = f"{random.randint(1000, 9999):04d}"
+        self.delivery_code = code
         self.delivery_code_hash = self._hash_delivery_code(code)
         self.delivery_code_sent_at = timezone.now()
-        self.save(update_fields=['delivery_code_hash', 'delivery_code_sent_at', 'updated_at'])
+        self.save(update_fields=['delivery_code', 'delivery_code_hash', 'delivery_code_sent_at', 'updated_at'])
         return code
 
     def verify_delivery_code(self, raw_code):

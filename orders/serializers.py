@@ -35,6 +35,7 @@ class OrderListLightSerializer(serializers.ModelSerializer):
     service_name = serializers.CharField(source="service.name", read_only=True, allow_null=True)
     user_name = serializers.SerializerMethodField()
     rider_name = serializers.SerializerMethodField()
+    delivery_code = serializers.SerializerMethodField()
     
     def get_user_name(self, obj):
         if not obj.user:
@@ -46,12 +47,25 @@ class OrderListLightSerializer(serializers.ModelSerializer):
         if not rider:
             return "Unassigned"
         return f"{rider.first_name} {rider.last_name}".strip() or rider.username
+
+    def get_delivery_code(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if (
+            not user
+            or not user.is_authenticated
+            or obj.user_id != user.id
+            or obj.status in ['delivered', 'cancelled']
+        ):
+            return None
+        return obj.delivery_code
     
     class Meta:
         model = Order
         fields = [
             "id", "code", "status", "created_at", "customer_name", "service_name",
-            "user_name", "rider_name", "price", "actual_price", "is_paid", "order_type"
+            "user_name", "rider_name", "price", "actual_price", "is_paid", "order_type",
+            "delivery_code",
         ]
 
 

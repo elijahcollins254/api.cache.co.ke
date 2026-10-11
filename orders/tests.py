@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from decimal import Decimal
 
 from orders.models import Order
+from orders.serializers import OrderListLightSerializer
 from services.models import Service
 from users.models import Location
 
@@ -50,6 +51,39 @@ class OrderDeliveryVerificationTests(TestCase):
         self.assertEqual(len(code), 4)
         self.assertTrue(order.verify_delivery_code(code))
         self.assertFalse(order.verify_delivery_code('0000'))
+        order.refresh_from_db()
+        self.assertEqual(order.delivery_code, code)
+
+    def test_delivery_code_is_only_included_for_own_active_order(self):
+        order = Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate B',
+            status='accepted_delivery',
+            delivery_rider=self.rider,
+            delivery_code='1234',
+            price=Decimal('2500.00'),
+            service_location=self.location,
+        )
+
+        class Request:
+            user = self.customer
+
+        self.assertEqual(
+            OrderListLightSerializer(order, context={'request': Request()}).data['delivery_code'],
+            '1234',
+        )
+
+        Request.user = self.rider
+        self.assertIsNone(
+            OrderListLightSerializer(order, context={'request': Request()}).data['delivery_code'],
+        )
+
+        Request.user = self.customer
+        order.status = 'delivered'
+        self.assertIsNone(
+            OrderListLightSerializer(order, context={'request': Request()}).data['delivery_code'],
+        )
 
     def test_delivery_code_is_not_reused_after_new_generation(self):
         order = Order.objects.create(

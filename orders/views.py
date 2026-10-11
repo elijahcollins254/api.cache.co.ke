@@ -465,7 +465,7 @@ class OrderUpdateView(APIView):
                         'already_notified': True,
                     })
 
-                if not order.delivery_code_hash:
+                if not order.delivery_code:
                     delivery_code = order.generate_delivery_code()
                     send_customer_delivery_code_sms(order, delivery_code)
                 order.status = 'at_gate'
@@ -500,7 +500,7 @@ class OrderUpdateView(APIView):
                     )
 
                 order.delivery_rider = request.user
-                if not order.delivery_code_hash:
+                if not order.delivery_code:
                     delivery_code = order.generate_delivery_code()
                     send_customer_delivery_code_sms(order, delivery_code)
             
