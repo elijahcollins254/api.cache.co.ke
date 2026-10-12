@@ -8,6 +8,7 @@ from rest_framework.test import APIClient
 from orders.models import Order, OrderEvent, OrderReview
 from orders.serializers import OrderListLightSerializer, OrderListSerializer
 from orders.views import OrderListCreateView
+from payments.models import Payment
 from services.models import Service
 from users.models import Location
 
@@ -94,6 +95,35 @@ class OrderDeliveryVerificationTests(TestCase):
             description='Test service',
             price=Decimal('1000.00'),
         )
+
+    def test_payment_status_returns_assigned_rider_details(self):
+        order = Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate B',
+            status='assigned_pickup',
+            delivery_rider=self.rider,
+            price=Decimal('1000.00'),
+            service_location=self.location,
+        )
+        Payment.objects.create(
+            user=self.customer,
+            order_id=order.id,
+            amount=Decimal('1000.00'),
+            phone_number=self.customer.phone,
+            status=Payment.STATUS_SUCCESS,
+        )
+        client = APIClient()
+        client.force_authenticate(user=self.customer)
+
+        response = client.get(f'/orders/{order.code}/payment-status/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['rider_assigned'])
+        self.assertEqual(response.data['rider'], {
+            'name': self.rider.get_full_name() or self.rider.username,
+            'phone': self.rider.phone,
+        })
 
     def test_code_filtered_orders_use_the_full_serializer(self):
         view = OrderListCreateView()

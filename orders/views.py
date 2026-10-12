@@ -1684,6 +1684,12 @@ class OrderPaymentStatusView(APIView):
                     {'detail': 'You do not have permission to view this order'},
                     status=status.HTTP_403_FORBIDDEN
                 )
+
+            rider = order.delivery_rider or order.pickup_rider or order.rider
+            rider_info = {
+                'name': rider.get_full_name() or rider.username,
+                'phone': rider.phone,
+            } if rider else None
             
             # Get the latest payment for this order
             from payments.models import Payment
@@ -1737,7 +1743,8 @@ class OrderPaymentStatusView(APIView):
                     'paid_amount': float(paid),
                     'remaining_amount': float(remaining),
                     'can_start_delivery': remaining <= Decimal('0.01'),
-                    'rider_assigned': bool(order.rider),
+                    'rider_assigned': rider is not None,
+                    'rider': rider_info,
                     'delivery_requested': order.delivery_requested,
                 })
 
@@ -1748,7 +1755,8 @@ class OrderPaymentStatusView(APIView):
                     'checkout_request_id': '',
                     'order_id': order.code,
                     'amount': 0,
-                    'rider_assigned': bool(order.rider),
+                    'rider_assigned': rider is not None,
+                    'rider': rider_info,
                     'delivery_requested': order.delivery_requested,
                 }, status=status.HTTP_404_NOT_FOUND)
                 
