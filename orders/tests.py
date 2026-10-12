@@ -161,6 +161,41 @@ class OrderDeliveryVerificationTests(TestCase):
             OrderListLightSerializer(order, context={'request': Request()}).data['review_rating'],
         )
 
+    def test_full_order_review_rating_is_visible_to_customer_and_assigned_rider(self):
+        order = Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate B',
+            status='delivered',
+            delivery_rider=self.rider,
+            price=Decimal('2500.00'),
+            service_location=self.location,
+        )
+        OrderReview.objects.create(order=order, customer=self.customer, rating=5)
+
+        class Request:
+            user = self.customer
+
+        self.assertEqual(
+            OrderListSerializer(order, context={'request': Request()}).data['review_rating'],
+            5,
+        )
+
+        Request.user = self.rider
+        self.assertEqual(
+            OrderListSerializer(order, context={'request': Request()}).data['review_rating'],
+            5,
+        )
+
+        Request.user = User.objects.create_user(
+            username='unassigned_rider',
+            password='secret123',
+            role='rider',
+        )
+        self.assertIsNone(
+            OrderListSerializer(order, context={'request': Request()}).data['review_rating'],
+        )
+
     def test_delivery_code_is_generated_and_verified(self):
         order = Order.objects.create(
             user=self.customer,

@@ -546,7 +546,15 @@ class OrderListSerializer(serializers.ModelSerializer):
     def get_review_rating(self, obj):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
-        if not user or not user.is_authenticated or obj.user_id != user.id:
+        if not user or not user.is_authenticated:
+            return None
+
+        is_customer = obj.user_id == user.id
+        is_assigned_rider = (
+            obj.status == 'delivered'
+            and user.id in (obj.rider_id, obj.pickup_rider_id, obj.delivery_rider_id)
+        )
+        if not is_customer and not is_assigned_rider:
             return None
         try:
             review = obj.review
