@@ -5,7 +5,7 @@ from django.utils import timezone
 from decimal import Decimal
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
-from django.db.models import Count, Q, Sum
+from django.db.models import Avg, Count, Q, Sum
 from rest_framework.views import APIView
 from .models import Order, OrderReview
 from .serializers import OrderListSerializer, OrderCreateSerializer, OrderReviewSerializer
@@ -47,6 +47,39 @@ class AdminDashboardSummaryView(APIView):
             'revenue': float(order_stats['total_revenue'] or 0),
             'active_riders': active_riders,
             'total_users': User.objects.count(),
+        })
+
+
+class RiderRatingSummaryView(APIView):
+    """Return the authenticated rider's rating across their delivered orders."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        rider = request.user
+        if getattr(rider, 'role', None) != 'rider':
+            return Response(
+                {'detail': 'Only riders can view rider rating statistics.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        assigned_orders = Order.objects.filter(
+            Q(rider=rider) | Q(pickup_rider=rider) | Q(delivery_rider=rider),
+            status='delivered',
+        )
+        review_stats = OrderReview.objects.filter(order__in=assigned_orders).aggregate(
+            average_rating=Avg('rating'),
+            rating_count=Count('pk'),
+        )
+
+        return Response({
+            'average_rating': (
+                round(review_stats['average_rating'], 1)
+                if review_stats['average_rating'] is not None
+                else None
+            ),
+            'rating_count': review_stats['rating_count'],
+            'delivered_order_count': assigned_orders.count(),
         })
 
 

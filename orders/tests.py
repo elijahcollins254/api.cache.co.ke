@@ -7,7 +7,7 @@ from rest_framework.test import APIClient
 
 from orders.models import Order, OrderEvent, OrderReview
 from orders.serializers import OrderListLightSerializer, OrderListSerializer
-from orders.views import OrderListCreateView
+from orders.views import OrderListCreateView, RiderRatingSummaryView
 from payments.models import Payment
 from services.models import Service
 from users.models import Location
@@ -195,6 +195,62 @@ class OrderDeliveryVerificationTests(TestCase):
         self.assertIsNone(
             OrderListSerializer(order, context={'request': Request()}).data['review_rating'],
         )
+
+    def test_rider_rating_summary_averages_reviews_for_delivered_assigned_orders(self):
+        first_order = Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate B',
+            status='delivered',
+            rider=self.rider,
+            price=Decimal('1000.00'),
+        )
+        second_order = Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate C',
+            status='delivered',
+            delivery_rider=self.rider,
+            price=Decimal('1200.00'),
+        )
+        Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate D',
+            status='delivered',
+            pickup_rider=self.rider,
+            price=Decimal('900.00'),
+        )
+        unrelated_order = Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate E',
+            status='delivered',
+            price=Decimal('800.00'),
+        )
+        OrderReview.objects.create(order=first_order, customer=self.customer, rating=5)
+        OrderReview.objects.create(order=second_order, customer=self.customer, rating=3)
+        OrderReview.objects.create(order=unrelated_order, customer=self.customer, rating=1)
+
+        client = APIClient()
+        client.force_authenticate(user=self.rider)
+
+        response = client.get('/orders/rider/rating-summary/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {
+            'average_rating': 4.0,
+            'rating_count': 2,
+            'delivered_order_count': 3,
+        })
+
+    def test_rider_rating_summary_is_restricted_to_riders(self):
+        client = APIClient()
+        client.force_authenticate(user=self.customer)
+
+        response = client.get('/orders/rider/rating-summary/')
+
+        self.assertEqual(response.status_code, 403)
 
     def test_delivery_code_is_generated_and_verified(self):
         order = Order.objects.create(
