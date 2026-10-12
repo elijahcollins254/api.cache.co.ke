@@ -104,7 +104,7 @@ def initiate_b2c(withdrawal):
         'Amount': int(withdrawal.amount),
         'PartyA': config['shortcode'],
         'PartyB': phone,
-        'Remarks': f'Rider earning withdrawal {withdrawal.id}',
+        'Remarks': f'Rider earnings payout {withdrawal.id}',
         'QueueTimeOutURL': timeout_url,
         'ResultURL': result_url,
         'Occasion': f'RIDER-{withdrawal.id}',

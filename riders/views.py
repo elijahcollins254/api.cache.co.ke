@@ -158,7 +158,7 @@ class RiderEarningsView(APIView):
                 withdrawal=withdrawal,
                 entry_type=RiderLedgerEntry.TYPE_WITHDRAWAL,
                 amount=amount,
-                description=f'M-Pesa withdrawal request #{withdrawal.pk}',
+                description=f'M-Pesa payout #{withdrawal.pk}',
             )
             RiderWallet.objects.filter(pk=wallet.pk).update(balance=F('balance') - amount, updated_at=timezone.now())
 
@@ -182,7 +182,7 @@ class RiderEarningsView(APIView):
             'amount': str(withdrawal.amount),
             'phone_number': withdrawal.phone_number,
             'status': withdrawal.status,
-            'message': 'Withdrawal submitted to M-Pesa. Its status will update when Safaricom confirms it.',
+            'message': 'Payout sent to M-Pesa. Its status will update when Safaricom confirms it.',
         }, status=status.HTTP_201_CREATED)
 
 
