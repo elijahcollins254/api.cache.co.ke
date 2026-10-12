@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from rest_framework.test import APIClient
 
-from orders.models import Order, OrderEvent
+from orders.models import Order, OrderEvent, OrderReview
 from orders.serializers import OrderListLightSerializer, OrderListSerializer
 from orders.views import OrderListCreateView
 from services.models import Service
@@ -106,6 +106,30 @@ class OrderDeliveryVerificationTests(TestCase):
         list_view = OrderListCreateView()
         list_view.request = SimpleNamespace(method='GET', query_params={})
         self.assertIs(list_view.get_serializer_class(), OrderListSerializer)
+
+    def test_review_rating_is_returned_to_customer_only(self):
+        order = Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate B',
+            status='delivered',
+            price=Decimal('2500.00'),
+            service_location=self.location,
+        )
+        OrderReview.objects.create(order=order, customer=self.customer, rating=4)
+
+        class Request:
+            user = self.customer
+
+        self.assertEqual(
+            OrderListLightSerializer(order, context={'request': Request()}).data['review_rating'],
+            4,
+        )
+
+        Request.user = self.rider
+        self.assertIsNone(
+            OrderListLightSerializer(order, context={'request': Request()}).data['review_rating'],
+        )
 
     def test_delivery_code_is_generated_and_verified(self):
         order = Order.objects.create(

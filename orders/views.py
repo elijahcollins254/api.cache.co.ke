@@ -1207,7 +1207,7 @@ class OrderListCreateView(generics.ListCreateAPIView):
             'description', 'washer_notes', 'folder_notes', 'fumigator_notes'
         ).select_related(
             'user', 'service', 'rider', 'service_location', 
-            'pickup_rider', 'delivery_rider', 'created_by'
+            'pickup_rider', 'delivery_rider', 'created_by', 'review'
         )
         
         # Filter by order code if provided

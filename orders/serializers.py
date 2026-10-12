@@ -37,6 +37,7 @@ class OrderListLightSerializer(serializers.ModelSerializer):
     rider_name = serializers.SerializerMethodField()
     delivery_code = serializers.SerializerMethodField()
     timeline = serializers.SerializerMethodField()
+    review_rating = serializers.SerializerMethodField()
     
     def get_user_name(self, obj):
         if not obj.user:
@@ -126,13 +127,24 @@ class OrderListLightSerializer(serializers.ModelSerializer):
             })
 
         return timeline
+
+    def get_review_rating(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated or obj.user_id != user.id:
+            return None
+        try:
+            review = obj.review
+        except OrderReview.DoesNotExist:
+            return None
+        return review.rating if review else None
     
     class Meta:
         model = Order
         fields = [
             "id", "code", "status", "created_at", "customer_name", "service_name",
             "user_name", "rider_name", "price", "actual_price", "is_paid", "order_type",
-            "delivery_code", "timeline",
+            "delivery_code", "timeline", "review_rating",
         ]
 
 
@@ -496,6 +508,7 @@ class OrderListSerializer(serializers.ModelSerializer):
     service_location = serializers.SerializerMethodField()
     rider = serializers.SerializerMethodField()
     delivery_code = serializers.SerializerMethodField()
+    review_rating = serializers.SerializerMethodField()
     pickup_rider = serializers.SerializerMethodField()
     delivery_rider = serializers.SerializerMethodField()
     created_by = serializers.SerializerMethodField()
@@ -529,6 +542,17 @@ class OrderListSerializer(serializers.ModelSerializer):
         ):
             return None
         return obj.delivery_code
+
+    def get_review_rating(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated or obj.user_id != user.id:
+            return None
+        try:
+            review = obj.review
+        except OrderReview.DoesNotExist:
+            return None
+        return review.rating if review else None
 
     def get_paid_amount(self, obj):
         from payments.views import get_order_payment_progress
@@ -856,6 +880,7 @@ class OrderListSerializer(serializers.ModelSerializer):
             "ready_at",
             "rider",
             "delivery_code",
+            "review_rating",
             "pickup_rider",
             "delivery_rider",
             "created_by",
