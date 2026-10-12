@@ -36,6 +36,7 @@ class OrderListLightSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField()
     rider_name = serializers.SerializerMethodField()
     delivery_code = serializers.SerializerMethodField()
+    timeline = serializers.SerializerMethodField()
     
     def get_user_name(self, obj):
         if not obj.user:
@@ -59,13 +60,79 @@ class OrderListLightSerializer(serializers.ModelSerializer):
         ):
             return None
         return obj.delivery_code
+
+    def get_timeline(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated or obj.user_id != user.id:
+            return []
+
+        status_labels = {
+            'pending_payment': 'Payment pending',
+            'partially_paid': 'Partially paid',
+            'requested': 'Order placed',
+            'pending_assignment': 'Finding a rider',
+            'assigned_pickup': 'Rider assigned',
+            'accepted_delivery': 'Rider confirmed',
+            'picked': 'Picked up',
+            'at_gate': 'At the gate',
+            'delivered': 'Delivered',
+            'cancelled': 'Cancelled',
+        }
+        timeline = [{
+            'key': f'created-{obj.pk}',
+            'label': 'Order placed',
+            'timestamp': obj.created_at.isoformat() if obj.created_at else None,
+        }]
+        latest_status = None
+
+        for event in obj.events.filter(
+            event_type__in=['status_changed', 'rider_assigned'],
+        ).order_by('created_at'):
+            if event.event_type == 'status_changed':
+                new_status = (event.data or {}).get('new')
+                if not new_status:
+                    continue
+                label = status_labels.get(new_status, new_status.replace('_', ' ').capitalize())
+                latest_status = new_status
+                timeline.append({
+                    'key': f'event-{event.pk}',
+                    'label': label,
+                    'timestamp': event.created_at.isoformat() if event.created_at else None,
+                })
+            else:
+                rider_name = (event.data or {}).get('new')
+                timeline.append({
+                    'key': f'event-{event.pk}',
+                    'label': 'Rider assigned',
+                    'subtitle': f'Assigned to {rider_name}' if rider_name else None,
+                    'timestamp': event.created_at.isoformat() if event.created_at else None,
+                })
+
+        if (
+            obj.status != latest_status
+            and status_labels.get(obj.status) != 'Order placed'
+        ):
+            status_timestamp = {
+                'accepted_delivery': obj.delivery_code_sent_at,
+                'picked': obj.picked_at,
+                'at_gate': obj.gate_notified_at,
+                'delivered': obj.delivered_at,
+            }.get(obj.status)
+            timeline.append({
+                'key': f'current-{obj.pk}',
+                'label': status_labels.get(obj.status, obj.status.replace('_', ' ').capitalize()),
+                'timestamp': status_timestamp.isoformat() if status_timestamp else None,
+            })
+
+        return timeline
     
     class Meta:
         model = Order
         fields = [
             "id", "code", "status", "created_at", "customer_name", "service_name",
             "user_name", "rider_name", "price", "actual_price", "is_paid", "order_type",
-            "delivery_code",
+            "delivery_code", "timeline",
         ]
 
 
@@ -428,6 +495,7 @@ class OrderListSerializer(serializers.ModelSerializer):
     user = serializers.SerializerMethodField()
     service_location = serializers.SerializerMethodField()
     rider = serializers.SerializerMethodField()
+    delivery_code = serializers.SerializerMethodField()
     pickup_rider = serializers.SerializerMethodField()
     delivery_rider = serializers.SerializerMethodField()
     created_by = serializers.SerializerMethodField()
@@ -449,6 +517,18 @@ class OrderListSerializer(serializers.ModelSerializer):
         from payments.views import get_order_payment_progress
         _total, _paid, remaining = get_order_payment_progress(obj)
         return remaining is not None and remaining <= Decimal('0.01')
+
+    def get_delivery_code(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if (
+            not user
+            or not user.is_authenticated
+            or obj.user_id != user.id
+            or obj.status in ['delivered', 'cancelled']
+        ):
+            return None
+        return obj.delivery_code
 
     def get_paid_amount(self, obj):
         from payments.views import get_order_payment_progress
@@ -499,6 +579,7 @@ class OrderListSerializer(serializers.ModelSerializer):
             'username': rider.username,
             'first_name': rider.first_name,
             'last_name': rider.last_name,
+            'phone': rider.phone,
             'service_location': {
                 'name': rider.service_location.name if rider.service_location else None
             }
@@ -774,6 +855,7 @@ class OrderListSerializer(serializers.ModelSerializer):
             "picked_at",
             "ready_at",
             "rider",
+            "delivery_code",
             "pickup_rider",
             "delivery_rider",
             "created_by",

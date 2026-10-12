@@ -1114,13 +1114,6 @@ class OrderListCreateView(generics.ListCreateAPIView):
     
     pagination_class = OrderPagination
     
-    def get_serializer_class(self):
-        """Use lightweight serializer for list view, full serializer for detail view"""
-        if self.request.method == 'GET':
-            from .serializers import OrderListLightSerializer
-            return OrderListLightSerializer
-        return OrderCreateSerializer
-    
     def get_serializer(self, *args, **kwargs):
         """
         Support ?fields= query parameter to request only specific fields

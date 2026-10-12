@@ -1,9 +1,11 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from decimal import Decimal
+from types import SimpleNamespace
 
-from orders.models import Order
-from orders.serializers import OrderListLightSerializer
+from orders.models import Order, OrderEvent
+from orders.serializers import OrderListLightSerializer, OrderListSerializer
+from orders.views import OrderListCreateView
 from services.models import Service
 from users.models import Location
 
@@ -32,6 +34,18 @@ class OrderDeliveryVerificationTests(TestCase):
             description='Test service',
             price=Decimal('1000.00'),
         )
+
+    def test_code_filtered_orders_use_the_full_serializer(self):
+        view = OrderListCreateView()
+        view.request = SimpleNamespace(
+            method='GET',
+            query_params={'code': 'ORDER-CODE'},
+        )
+        self.assertIs(view.get_serializer_class(), OrderListSerializer)
+
+        list_view = OrderListCreateView()
+        list_view.request = SimpleNamespace(method='GET', query_params={})
+        self.assertIs(list_view.get_serializer_class(), OrderListSerializer)
 
     def test_delivery_code_is_generated_and_verified(self):
         order = Order.objects.create(
@@ -84,6 +98,70 @@ class OrderDeliveryVerificationTests(TestCase):
         self.assertIsNone(
             OrderListLightSerializer(order, context={'request': Request()}).data['delivery_code'],
         )
+
+    def test_timeline_includes_order_creation_and_status_events_for_customer(self):
+        order = Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate B',
+            status='at_gate',
+            delivery_rider=self.rider,
+            price=Decimal('2500.00'),
+            service_location=self.location,
+        )
+        OrderEvent.objects.create(
+            order=order,
+            actor=self.rider,
+            event_type='status_changed',
+            data={'old': 'picked', 'new': 'at_gate'},
+        )
+
+        class Request:
+            user = self.customer
+
+        timeline = OrderListLightSerializer(order, context={'request': Request()}).data['timeline']
+        self.assertEqual([event['label'] for event in timeline], ['Order placed', 'At the gate'])
+        self.assertTrue(timeline[0]['timestamp'])
+        self.assertTrue(timeline[1]['timestamp'])
+
+        Request.user = self.rider
+        self.assertEqual(
+            OrderListLightSerializer(order, context={'request': Request()}).data['timeline'],
+            [],
+        )
+
+    def test_full_order_serializer_includes_customer_timeline_and_delivery_code(self):
+        order = Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate B',
+            status='at_gate',
+            delivery_rider=self.rider,
+            delivery_code='4321',
+            price=Decimal('2500.00'),
+            service_location=self.location,
+        )
+        OrderEvent.objects.create(
+            order=order,
+            actor=self.rider,
+            event_type='status_changed',
+            data={'old': 'picked', 'new': 'at_gate'},
+        )
+
+        class Request:
+            user = self.customer
+
+        serialized = OrderListSerializer(order, context={'request': Request()}).data
+        self.assertEqual(serialized['delivery_code'], '4321')
+        self.assertEqual(serialized['timeline'][0]['event_type'], 'status_changed')
+
+        Request.user = self.rider
+        serialized_for_rider = OrderListSerializer(order, context={'request': Request()}).data
+        self.assertIsNone(serialized_for_rider['delivery_code'])
+        self.assertTrue(all(
+            event['event_type'] == 'status_changed'
+            for event in serialized_for_rider['timeline']
+        ))
 
     def test_delivery_code_is_not_reused_after_new_generation(self):
         order = Order.objects.create(
