@@ -2,6 +2,7 @@
 
 from django.urls import path
 from .views import (
+    AdminDashboardSummaryView,
     OrderListCreateView, 
     OrderUpdateView, 
     RiderOrderListView,
@@ -16,6 +17,7 @@ from .views import (
 )
 
 urlpatterns = [
+    path('admin-summary/', AdminDashboardSummaryView.as_view(), name='admin-dashboard-summary'),
     path('', OrderListCreateView.as_view(), name='order-list'),
     path('update/', OrderUpdateView.as_view(), name='order-update'),
     path('rider/', RiderOrderListView.as_view(), name='rider-order-list'),

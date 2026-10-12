@@ -3,6 +3,8 @@ from django.contrib.auth import get_user_model
 from decimal import Decimal
 from types import SimpleNamespace
 
+from rest_framework.test import APIClient
+
 from orders.models import Order, OrderEvent
 from orders.serializers import OrderListLightSerializer, OrderListSerializer
 from orders.views import OrderListCreateView
@@ -10,6 +12,64 @@ from services.models import Service
 from users.models import Location
 
 User = get_user_model()
+
+
+class AdminDashboardSummaryTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='dashboard_admin',
+            password='secret123',
+            role='admin',
+        )
+        self.customer = User.objects.create_user(
+            username='dashboard_customer',
+            password='secret123',
+            role='customer',
+        )
+        self.rider = User.objects.create_user(
+            username='dashboard_rider',
+            password='secret123',
+            role='rider',
+        )
+        self.client = APIClient()
+
+    def test_summary_aggregates_all_orders_and_user_counts(self):
+        Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate B',
+            status='delivered',
+            delivery_rider=self.rider,
+            price=Decimal('2500.00'),
+        )
+        Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate B',
+            status='requested',
+            pickup_rider=self.rider,
+            price=Decimal('1200.00'),
+        )
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get('/orders/admin-summary/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {
+            'total_orders': 2,
+            'in_progress': 1,
+            'completed': 1,
+            'revenue': 3700.0,
+            'active_riders': 1,
+            'total_users': 3,
+        })
+
+    def test_summary_is_restricted_to_administrators(self):
+        self.client.force_authenticate(user=self.customer)
+
+        response = self.client.get('/orders/admin-summary/')
+
+        self.assertEqual(response.status_code, 403)
 
 
 class OrderDeliveryVerificationTests(TestCase):

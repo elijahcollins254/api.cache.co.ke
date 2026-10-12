@@ -5,13 +5,49 @@ from django.utils import timezone
 from decimal import Decimal
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
-from django.db.models import Q, Sum
+from django.db.models import Count, Q, Sum
 from rest_framework.views import APIView
 from .models import Order, OrderReview
 from .serializers import OrderListSerializer, OrderCreateSerializer, OrderReviewSerializer
 from users.permissions import LocationBasedPermission
-from users.models import Location
+from users.models import Location, User
 from offers.models import UserOffer
+
+
+class AdminDashboardSummaryView(APIView):
+    """Return dashboard totals without loading paginated order records."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if not (user.is_superuser or getattr(user, 'role', None) == 'admin'):
+            return Response(
+                {'detail': 'Only administrators can view dashboard statistics.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        order_stats = Order.objects.aggregate(
+            total_orders=Count('pk'),
+            completed=Count('pk', filter=Q(status__iexact='delivered')),
+            total_revenue=Sum('price'),
+        )
+        active_riders = User.objects.filter(
+            Q(assigned_orders__isnull=False)
+            | Q(pickup_orders__isnull=False)
+            | Q(delivery_orders__isnull=False)
+        ).distinct().count()
+
+        total_orders = order_stats['total_orders']
+        completed = order_stats['completed']
+        return Response({
+            'total_orders': total_orders,
+            'in_progress': total_orders - completed,
+            'completed': completed,
+            'revenue': float(order_stats['total_revenue'] or 0),
+            'active_riders': active_riders,
+            'total_users': User.objects.count(),
+        })
 
 
 def send_rider_assignment_sms(order, rider):
