@@ -1,11 +1,22 @@
+from django.core.paginator import EmptyPage, Paginator
+from django.db.models import Q
+from django.db.models.functions import Lower
 from rest_framework import viewsets, permissions, filters
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from marketplace.models import Product
 from marketplace.serializers import ShopSerializer
 from .models import Service, ServiceCategory
 from .serializers import ServiceCategorySerializer, ServiceSerializer
+
+
+class CatalogPagination(PageNumberPagination):
+    page_size = 24
+    page_size_query_param = 'page_size'
+    max_page_size = 48
 
 
 class ServiceCategoryViewSet(viewsets.ReadOnlyModelViewSet):
@@ -48,6 +59,41 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if not request.user.is_authenticated:
             products = products.filter(shop__is_verified=True, shop__status='active')
 
+        search = request.query_params.get('search', '').strip()
+        if search:
+            services = services.filter(
+                Q(name__icontains=search)
+                | Q(description__icontains=search)
+                | Q(category__name__icontains=search)
+                | Q(category_name__icontains=search)
+                | Q(shop__name__icontains=search)
+            )
+            products = products.filter(
+                Q(name__icontains=search)
+                | Q(description__icontains=search)
+                | Q(category__name__icontains=search)
+                | Q(shop__name__icontains=search)
+            )
+
+        paginated = 'page' in request.query_params or 'page_size' in request.query_params
+        page_size = None
+        page_number = None
+        total_count = None
+        if paginated:
+            paginator = CatalogPagination()
+            page_size = paginator.get_page_size(request)
+            try:
+                page_number = int(request.query_params.get('page', '1'))
+            except ValueError as exc:
+                raise ValidationError({'page': 'Enter a valid page number.'}) from exc
+            if page_number < 1:
+                raise ValidationError({'page': 'Page numbers must be greater than zero.'})
+
+            total_count = services.count() + products.count()
+            fetch_limit = page_number * page_size
+            services = services.order_by(Lower('name'), 'pk')[:fetch_limit]
+            products = products.order_by(Lower('name'), 'pk')[:fetch_limit]
+
         catalog = []
 
         for service in services:
@@ -77,7 +123,17 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 'shop': ShopSerializer(product.shop, context={'request': request}).data if product.shop else None,
             })
 
-        catalog.sort(key=lambda item: (item['name'] or '').lower())
+        catalog.sort(key=lambda item: ((item['name'] or '').lower(), item['type'], item['id']))
+        if paginated:
+            start = (page_number - 1) * page_size
+            page_items = catalog[start:start + page_size]
+            page = Paginator(range(total_count), page_size)
+            try:
+                paginator.page = page.page(page_number)
+            except EmptyPage as exc:
+                raise NotFound('Invalid page.') from exc
+            paginator.request = request
+            return paginator.get_paginated_response(page_items)
         return Response(catalog)
 
     # public read access, authenticated required to create/update/delete

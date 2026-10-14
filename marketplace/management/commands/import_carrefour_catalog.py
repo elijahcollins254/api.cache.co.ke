@@ -61,8 +61,6 @@ class Command(BaseCommand):
             return
 
         created_categories = 0
-        created_products = 0
-        updated_products = 0
         with transaction.atomic():
             category_rows = {}
             for category_name in sorted(categories):
@@ -81,29 +79,29 @@ class Command(BaseCommand):
                     created_categories += 1
                 category_rows[category_name] = category
 
-            for product in products.values():
-                _, created = Product.objects.update_or_create(
+            product_rows = [
+                Product(
                     shop=shop,
+                    category=category_rows[product['category']],
+                    name=product['name'],
                     slug=product['slug'],
-                    defaults={
-                        'category': category_rows[product['category']],
-                        'name': product['name'],
-                        'price': product['price'],
-                        'image_url': product['image_url'],
-                    },
-                    create_defaults={
-                        'category': category_rows[product['category']],
-                        'name': product['name'],
-                        'price': product['price'],
-                        'image_url': product['image_url'],
-                        'stock_quantity': 0,
-                        'is_active': True,
-                    },
+                    price=product['price'],
+                    image_url=product['image_url'],
+                    stock_quantity=0,
+                    is_active=True,
                 )
-                if created:
-                    created_products += 1
-                else:
-                    updated_products += 1
+                for product in products.values()
+            ]
+            Product.objects.bulk_create(
+                product_rows,
+                batch_size=200,
+                update_conflicts=True,
+                update_fields=['category', 'name', 'price', 'image_url'],
+                unique_fields=['shop', 'slug'],
+            )
+
+        created_products = new_count
+        updated_products = update_count
 
         self.stdout.write(self.style.SUCCESS(
             f'Imported {created_products} new and updated {updated_products} products; '

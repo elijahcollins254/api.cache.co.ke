@@ -353,3 +353,33 @@ class MarketplaceAPITest(TestCase):
         self.assertIn('Fresh Avocado', names)
         self.assertTrue(any(item['type'] == 'service' and item['name'] == 'Express Wash' for item in response.data))
         self.assertTrue(any(item['type'] == 'product' and item['name'] == 'Fresh Avocado' for item in response.data))
+
+    def test_catalog_endpoint_paginates_and_searches_on_request(self):
+        merchant = MerchantProfile.objects.create(
+            user=self.user,
+            merchant_username='freshbasket',
+            business_name='Fresh Basket',
+            phone='+254712345678',
+        )
+        shop = Shop.objects.create(
+            owner=merchant,
+            name='Fresh Basket Shop',
+            slug='fresh-basket-shop',
+            is_verified=True,
+            status='active',
+        )
+        Product.objects.create(shop=shop, name='Fresh Avocado', price='120.00')
+        Product.objects.create(shop=shop, name='Red Apple', price='80.00')
+
+        response = self.client.get('/services/catalog/?page_size=1')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 2)
+        self.assertEqual(len(response.data['results']), 1)
+        self.assertIsNotNone(response.data['next'])
+
+        search_response = self.client.get('/services/catalog/?page_size=24&search=apple')
+
+        self.assertEqual(search_response.status_code, 200)
+        self.assertEqual(search_response.data['count'], 1)
+        self.assertEqual(search_response.data['results'][0]['name'], 'Red Apple')

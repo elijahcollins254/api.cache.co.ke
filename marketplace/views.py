@@ -1,4 +1,5 @@
 from django.utils.text import slugify
+from django.db.models import Count, Q
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -75,7 +76,12 @@ class ProductCategoryViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ShopViewSet(viewsets.ModelViewSet):
-    queryset = Shop.objects.all().select_related('owner', 'owner__user', 'category')
+    queryset = Shop.objects.all().select_related('owner', 'owner__user', 'category').annotate(
+        catalog_count=(
+            Count('products', filter=Q(products__is_active=True), distinct=True)
+            + Count('services', filter=Q(services__is_active=True), distinct=True)
+        )
+    )
     serializer_class = ShopSerializer
     permission_classes = [permissions.AllowAny]
     lookup_field = 'slug'

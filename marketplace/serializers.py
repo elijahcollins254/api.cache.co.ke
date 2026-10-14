@@ -36,6 +36,7 @@ class ProductCategorySerializer(serializers.ModelSerializer):
 class ShopSerializer(serializers.ModelSerializer):
     owner = MerchantProfileSerializer(read_only=True, allow_null=True)
     merchant_username = serializers.SerializerMethodField()
+    catalog_count = serializers.IntegerField(read_only=True, required=False)
     category = ShopCategorySerializer(read_only=True, allow_null=True)
     category_id = serializers.PrimaryKeyRelatedField(
         source='category',
@@ -51,6 +52,7 @@ class ShopSerializer(serializers.ModelSerializer):
             'id',
             'owner',
             'merchant_username',
+            'catalog_count',
             'category',
             'category_id',
             'name',

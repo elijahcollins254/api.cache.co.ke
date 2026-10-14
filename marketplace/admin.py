@@ -13,6 +13,11 @@ def deactivate_products(modeladmin, request, queryset):
     queryset.update(is_active=False)
 
 
+@admin.action(description='Deactivate selected product categories')
+def deactivate_product_categories(modeladmin, request, queryset):
+    queryset.update(is_active=False)
+
+
 @admin.register(MerchantProfile)
 class MerchantProfileAdmin(admin.ModelAdmin):
     list_display = ('business_name', 'merchant_username', 'user', 'status', 'is_verified')
@@ -34,6 +39,7 @@ class ProductCategoryAdmin(admin.ModelAdmin):
     list_filter = ('is_active',)
     search_fields = ('name', 'description')
     prepopulated_fields = {'slug': ('name',)}
+    actions = [deactivate_product_categories]
 
 
 @admin.register(Shop)
