@@ -1,8 +1,9 @@
 # financing/serializers.py
 from rest_framework import serializers
 from decimal import Decimal
-from .models import LoanApplication, LoanCollateral, LoanGuarantor, LoanRepayment, Investment
+from .models import LoanApplication, LoanCollateral, LoanGuarantor, LoanRepayment, Investment, ShareInvestment
 from orders.models import Order
+import re
 
 
 class LoanCollateralSerializer(serializers.ModelSerializer):
@@ -181,6 +182,43 @@ class CreateInvestmentSerializer(serializers.Serializer):
         )
         
         return investment
+
+
+class ShareInvestmentSerializer(serializers.ModelSerializer):
+    shares_percentage = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ShareInvestment
+        fields = ['id', 'amount', 'status', 'shares_percentage', 'created_at', 'completed_at']
+        read_only_fields = fields
+
+    def get_shares_percentage(self, obj):
+        return float(obj.amount * Decimal('10') / Decimal('1000000'))
+
+
+class CreateShareInvestmentSerializer(serializers.Serializer):
+    amount = serializers.IntegerField(min_value=1)
+    phone = serializers.CharField(max_length=32)
+
+    def validate_phone(self, value):
+        digits = re.sub(r'\D', '', value)
+        if len(digits) == 10 and digits.startswith('0'):
+            digits = f'254{digits[1:]}'
+        elif len(digits) == 9:
+            digits = f'254{digits}'
+
+        if len(digits) != 12 or not digits.startswith('254') or digits[3] not in ('1', '7'):
+            raise serializers.ValidationError('Enter a valid Kenyan mobile number.')
+
+        return digits
+
+    def create(self, validated_data):
+        request = self.context['request']
+        return ShareInvestment.objects.create(
+            user=request.user if request.user.is_authenticated else None,
+            amount=validated_data['amount'],
+            phone_number=validated_data['phone'],
+        )
 
 
 class LoanApplicationDetailSerializer(serializers.ModelSerializer):

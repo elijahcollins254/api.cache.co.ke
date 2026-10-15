@@ -279,3 +279,32 @@ class Investment(models.Model):
     
     def __str__(self):
         return f"Investment {self.id} - {self.user.username} - {self.plan_type} - KSh {self.amount}"
+
+
+class ShareInvestment(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending Payment'),
+        ('success', 'Paid'),
+        ('failed', 'Payment Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='share_investments',
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    phone_number = models.CharField(max_length=32)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    checkout_request_id = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Share investment {self.id} - KSh {self.amount} - {self.status}"

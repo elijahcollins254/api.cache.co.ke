@@ -1075,6 +1075,30 @@ class MpesaSTKPushView(views.APIView):
         amount = request.data.get('amount')
         phone = request.data.get('phone')
         order_id = request.data.get('order_id')  # Can be null for game wallet top-ups
+        share_investment_id = request.data.get('share_investment_id')
+        share_investment = None
+
+        if share_investment_id:
+            from financing.models import ShareInvestment
+
+            try:
+                share_investment = ShareInvestment.objects.get(pk=share_investment_id)
+            except (ShareInvestment.DoesNotExist, ValueError):
+                return Response(
+                    {'detail': 'Share investment not found.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            if share_investment.status != 'pending':
+                return Response(
+                    {'detail': 'This share investment already has a payment outcome.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if share_investment.checkout_request_id:
+                return Response(
+                    {'detail': 'An M-Pesa prompt has already been sent for this investment.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         
         logger.info(f"STK Push request: amount={amount}, phone={phone}, order_id={order_id}")
         
@@ -1104,6 +1128,18 @@ class MpesaSTKPushView(views.APIView):
         except (ValueError, TypeError):
             return Response(
                 {'detail': 'Invalid amount format'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if amount <= 0:
+            return Response(
+                {'detail': 'Amount must be greater than zero.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if share_investment and amount_float != float(share_investment.amount):
+            return Response(
+                {'detail': 'Payment amount must match the share investment amount.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -1151,11 +1187,23 @@ class MpesaSTKPushView(views.APIView):
                 {'detail': 'Invalid phone number. Use format: 254712345678 or 0712345678'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        if share_investment:
+            normalized_phone = ''.join(character for character in phone if character.isdigit())
+            if normalized_phone.startswith('0'):
+                normalized_phone = f'254{normalized_phone[1:]}'
+            if normalized_phone != share_investment.phone_number:
+                return Response(
+                    {'detail': 'Payment phone must match the share investment phone.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         
         # Clean up phone number - remove + prefix if present
         if phone.startswith('+'):
             phone = phone[1:]
             logger.info(f"Cleaned phone number from request: {phone}")
+        if share_investment:
+            phone = share_investment.phone_number
         
         # Log the phone being used
         logger.info(f"Using phone number for STK Push: {phone}")
@@ -1174,8 +1222,12 @@ class MpesaSTKPushView(views.APIView):
             access_token = self._get_access_token()
             
             # Determine if this is a game wallet top-up (order_id is null)
-            is_game_wallet_topup = order_id is None
-            account_reference = order_id if order_id else 'GAME_WALLET_TOPUP'
+            is_game_wallet_topup = order_id is None and share_investment is None
+            account_reference = (
+                'CACHEINVEST'
+                if share_investment
+                else order_id if order_id else 'GAME_WALLET_TOPUP'
+            )
             
             # Initiate STK Push
             stk_response = self._initiate_stk_push(
@@ -1184,6 +1236,9 @@ class MpesaSTKPushView(views.APIView):
             
             # Create Payment record
             checkout_request_id = stk_response.get('CheckoutRequestID', '')
+            if not checkout_request_id:
+                raise ValueError('M-Pesa did not return a checkout request ID.')
+
             payment = Payment.objects.create(
                 user=request.user if request.user.is_authenticated else None,
                 order_id=order_id_numeric,
@@ -1194,10 +1249,15 @@ class MpesaSTKPushView(views.APIView):
                 status='pending',
                 raw_payload={
                     'order_reference': account_reference,
-                    'is_game_wallet': is_game_wallet_topup
+                    'is_game_wallet': is_game_wallet_topup,
+                    'is_share_investment': share_investment is not None,
+                    'share_investment_id': str(share_investment.id) if share_investment else None,
                 }
             )
             payment.mark_initiated(provider_reference=checkout_request_id)
+            if share_investment:
+                share_investment.checkout_request_id = checkout_request_id
+                share_investment.save(update_fields=['checkout_request_id'])
             
             logger.info(f"Payment initiated successfully: {checkout_request_id}, is_game_wallet: {is_game_wallet_topup}")
             return Response({
@@ -1209,6 +1269,10 @@ class MpesaSTKPushView(views.APIView):
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
+            if share_investment:
+                share_investment.status = 'failed'
+                share_investment.completed_at = timezone.now()
+                share_investment.save(update_fields=['status', 'completed_at'])
             logger.error(f"Error initiating payment: {str(e)}", exc_info=True)
             return Response(
                 {'detail': f'Error initiating payment: {str(e)}'},
@@ -1525,11 +1589,23 @@ class MpesaCallbackView(views.APIView):
                 if result_code == 0:
                     payment.mark_success(payload=data)
                     logger.info(f"Payment marked as success: {checkout_request_id}")
+
+                    is_share_investment = (payment.raw_payload or {}).get('is_share_investment', False)
+                    if is_share_investment:
+                        from financing.models import ShareInvestment
+
+                        share_investment_id = (payment.raw_payload or {}).get('share_investment_id')
+                        share_investment = ShareInvestment.objects.select_for_update().get(
+                            pk=share_investment_id
+                        )
+                        share_investment.status = 'success'
+                        share_investment.completed_at = timezone.now()
+                        share_investment.save(update_fields=['status', 'completed_at'])
                     
                     # Check if this is a BNPL balance payment
                     is_bnpl_balance = (payment.raw_payload or {}).get('is_bnpl_balance_payment', False)
                     
-                    if is_bnpl_balance and payment.user:
+                    if is_bnpl_balance and payment.user and not is_share_investment:
                         try:
                             bnpl_user = BNPLUser.objects.get(user=payment.user)
                             # Reduce BNPL balance by payment amount
@@ -1549,7 +1625,11 @@ class MpesaCallbackView(views.APIView):
                             logger.error(f"Error reducing BNPL balance: {str(e)}", exc_info=True)
                     
                     # Check if this is a game wallet top-up
-                    elif (payment.raw_payload or {}).get('is_game_wallet', False) and payment.user:
+                    elif (
+                        (payment.raw_payload or {}).get('is_game_wallet', False)
+                        and payment.user
+                        and not is_share_investment
+                    ):
                         # Credit the game wallet
                         try:
                             from casino.models import GameWallet
@@ -1566,7 +1646,7 @@ class MpesaCallbackView(views.APIView):
                         except Exception as e:
                             logger.error(f"Error updating game wallet: {str(e)}", exc_info=True)
                     
-                    else:
+                    elif not is_share_investment:
                         # Update order's payment_method to reflect M-Pesa
                         order_reference = (payment.raw_payload or {}).get('order_reference')
                         if order_reference and order_reference != 'GAME_WALLET_TOPUP' and not order_reference.startswith('BNPL_BALANCE'):
@@ -1581,6 +1661,24 @@ class MpesaCallbackView(views.APIView):
                 else:
                     payment.mark_failed(payload=data, note=f'Result Code: {result_code}')
                     payload = payment.raw_payload or {}
+                    if payload.get('is_share_investment'):
+                        from financing.models import ShareInvestment
+
+                        share_investment_id = payload.get('share_investment_id')
+                        try:
+                            share_investment = ShareInvestment.objects.select_for_update().get(
+                                pk=share_investment_id
+                            )
+                        except ShareInvestment.DoesNotExist:
+                            logger.error(
+                                "Share investment %s missing for payment %s",
+                                share_investment_id,
+                                payment.pk,
+                            )
+                        else:
+                            share_investment.status = 'failed'
+                            share_investment.completed_at = timezone.now()
+                            share_investment.save(update_fields=['status', 'completed_at'])
                     if payload.get('is_boost_checkout'):
                         try:
                             boost_payment = Payment.objects.get(id=payload['boost_payment_id'])

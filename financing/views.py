@@ -2,10 +2,15 @@
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 from django.utils import timezone
-from django.db.models import Q
-from .models import LoanApplication, LoanCollateral, LoanGuarantor, LoanRepayment, Investment
+from django.db.models import Q, Sum
+from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import TruncMonth
+from datetime import timedelta
+from payments.models import Payment
+from orders.models import Order
+from .models import LoanApplication, LoanCollateral, LoanGuarantor, LoanRepayment, Investment, ShareInvestment
 from .serializers import (
     LoanApplicationDetailSerializer,
     LoanApplicationListSerializer,
@@ -15,7 +20,9 @@ from .serializers import (
     LoanRepaymentSerializer,
     InvestmentListSerializer,
     InvestmentDetailSerializer,
-    CreateInvestmentSerializer
+    CreateInvestmentSerializer,
+    ShareInvestmentSerializer,
+    CreateShareInvestmentSerializer,
 )
 
 
@@ -449,7 +456,7 @@ class InvestmentViewSet(viewsets.ModelViewSet):
             InvestmentDetailSerializer(investment).data,
             status=status.HTTP_200_OK
         )
-    
+
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
     def confirm_payment(self, request, pk=None):
         """Confirm payment for an investment"""
@@ -478,42 +485,161 @@ class InvestmentViewSet(viewsets.ModelViewSet):
             InvestmentDetailSerializer(investment).data,
             status=status.HTTP_200_OK
         )
-    
+
     @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
     def complete(self, request, pk=None):
         """Complete an investment at maturity"""
         investment = self.get_object()
-        
+
         if investment.status != 'active':
             return Response(
                 {'error': f'Cannot complete investment with status {investment.status}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         investment.status = 'completed'
         investment.total_received_returns = investment.expected_annual_return
         investment.save()
-        
+
         return Response(
             InvestmentDetailSerializer(investment).data,
             status=status.HTTP_200_OK
         )
-    
+
     @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
     def cancel(self, request, pk=None):
         """Cancel an investment"""
         investment = self.get_object()
-        
+
         if investment.status in ['completed', 'cancelled']:
             return Response(
                 {'error': f'Cannot cancel investment with status {investment.status}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         investment.status = 'cancelled'
         investment.save()
-        
+
         return Response(
             InvestmentDetailSerializer(investment).data,
             status=status.HTTP_200_OK
         )
+
+
+class ShareInvestmentViewSet(viewsets.GenericViewSet):
+    queryset = ShareInvestment.objects.all()
+    serializer_class = ShareInvestmentSerializer
+
+    def get_permissions(self):
+        if self.action in ('create', 'overview'):
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        if self.request.user.is_authenticated:
+            return ShareInvestment.objects.filter(user=self.request.user)
+        return ShareInvestment.objects.none()
+
+    def create(self, request, *args, **kwargs):
+        serializer = CreateShareInvestmentSerializer(
+            data=request.data,
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        investment = serializer.save()
+        return Response(
+            ShareInvestmentSerializer(investment).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=False, methods=['get'])
+    def mine(self, request):
+        investments = self.get_queryset()
+        return Response(ShareInvestmentSerializer(investments, many=True).data)
+
+    @action(detail=False, methods=['get'], permission_classes=[AllowAny])
+    def overview(self, request):
+        now = timezone.now()
+        six_months_ago = now - timedelta(days=183)
+
+        paid_investments = ShareInvestment.objects.filter(status='success')
+        total_raised = paid_investments.aggregate(total=Sum('amount'))['total'] or 0
+        investor_count = paid_investments.values('phone_number').distinct().count()
+        monthly_raise = (
+            paid_investments.filter(completed_at__gte=six_months_ago)
+            .annotate(month=TruncMonth('completed_at'))
+            .values('month')
+            .annotate(total=Sum('amount'))
+            .order_by('month')
+        )
+        raise_by_month = {
+            row['month'].strftime('%Y-%m'): float(row['total'])
+            for row in monthly_raise
+            if row['month']
+        }
+
+        orders = Order.objects.exclude(status='cancelled')
+        paid_order_payments = Payment.objects.filter(
+            status=Payment.STATUS_SUCCESS,
+            provider='mpesa',
+        ).annotate(
+            order_reference=KeyTextTransform('order_reference', 'raw_payload'),
+        ).filter(
+            Q(order_id__in=orders.values('id'))
+            | Q(order_reference__in=orders.values('code'))
+        )
+        gross_revenue = paid_order_payments.aggregate(total=Sum('amount'))['total'] or 0
+        paid_order_count = orders.filter(
+            Q(id__in=paid_order_payments.values('order_id'))
+            | Q(code__in=paid_order_payments.values('order_reference'))
+        ).distinct().count()
+        delivered_orders = orders.filter(status='delivered').count()
+        order_count = orders.count()
+        monthly_sales = (
+            paid_order_payments.filter(completed_at__gte=six_months_ago)
+            .annotate(month=TruncMonth('completed_at'))
+            .values('month')
+            .annotate(total=Sum('amount'))
+            .order_by('month')
+        )
+        sales_by_month = {
+            row['month'].strftime('%Y-%m'): float(row['total'])
+            for row in monthly_sales
+            if row['month']
+        }
+
+        months = []
+        month_cursor = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        for offset in range(5, -1, -1):
+            month_number = month_cursor.month - offset
+            year = month_cursor.year + (month_number - 1) // 12
+            month = (month_number - 1) % 12 + 1
+            month_key = f'{year:04d}-{month:02d}'
+            month_date = month_cursor.replace(year=year, month=month)
+            months.append({
+                'month': month_key,
+                'label': month_date.strftime('%b %Y'),
+                'raised': raise_by_month.get(month_key, 0),
+                'sales': sales_by_month.get(month_key, 0),
+            })
+
+        return Response({
+            'fundraising': {
+                'total_raised': float(total_raised),
+                'investor_count': investor_count,
+                'shares_issued_percentage': float(total_raised) / 1000000 * 10,
+                'target_raise': 1000000,
+                'target_shares_percentage': 10,
+                'monthly_raise': months,
+            },
+            'business': {
+                'gross_revenue': float(gross_revenue),
+                'order_count': order_count,
+                'delivered_order_count': delivered_orders,
+                'active_order_count': max(0, order_count - delivered_orders),
+                'average_paid_order_value': (
+                    float(gross_revenue) / paid_order_count if paid_order_count else 0
+                ),
+                'monthly_sales': months,
+            },
+        })
