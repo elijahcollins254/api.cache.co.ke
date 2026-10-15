@@ -6,6 +6,10 @@ class ServiceCategory(models.Model):
     slug = models.SlugField(unique=True, help_text='URL-friendly name (auto-generated)')
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True, help_text='Inactive categories will be hidden from the website')
+    featured_on_homepage = models.BooleanField(
+        default=False,
+        help_text='Show this category first on the home page. Selecting it clears the previous featured category.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

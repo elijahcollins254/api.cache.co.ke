@@ -35,11 +35,19 @@ class ShopCategoryAdmin(admin.ModelAdmin):
 
 @admin.register(ProductCategory)
 class ProductCategoryAdmin(admin.ModelAdmin):
-    list_display = ('name', 'slug', 'is_active', 'created_at')
-    list_filter = ('is_active',)
+    list_display = ('name', 'slug', 'is_active', 'featured_on_homepage', 'created_at')
+    list_filter = ('is_active', 'featured_on_homepage')
     search_fields = ('name', 'description')
     prepopulated_fields = {'slug': ('name',)}
     actions = [deactivate_product_categories]
+
+    def save_model(self, request, obj, form, change):
+        if obj.featured_on_homepage:
+            from services.models import ServiceCategory
+
+            ProductCategory.objects.exclude(pk=obj.pk).update(featured_on_homepage=False)
+            ServiceCategory.objects.update(featured_on_homepage=False)
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(Shop)

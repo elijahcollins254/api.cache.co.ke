@@ -15,16 +15,20 @@ def deactivate_services(modeladmin, request, queryset):
 
 @admin.register(ServiceCategory)
 class ServiceCategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "slug", "is_active", "service_count", "created_at")
-    list_filter = ("is_active", "created_at")
+    list_display = ("name", "slug", "is_active", "featured_on_homepage", "service_count", "created_at")
+    list_filter = ("is_active", "featured_on_homepage", "created_at")
     search_fields = ("name", "description")
     ordering = ("name",)
     readonly_fields = ("slug", "created_at", "updated_at")
     
     def save_model(self, request, obj, form, change):
-        """Auto-generate slug from name if not provided."""
         if not obj.slug:
             obj.slug = slugify(obj.name)
+        if obj.featured_on_homepage:
+            from marketplace.models import ProductCategory
+
+            ServiceCategory.objects.exclude(pk=obj.pk).update(featured_on_homepage=False)
+            ProductCategory.objects.update(featured_on_homepage=False)
         super().save_model(request, obj, form, change)
     
     def service_count(self, obj):

@@ -1,11 +1,14 @@
 from django.test import TestCase
+from django.test import RequestFactory
+from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from rest_framework.test import APIClient
 
 from .models import MerchantProfile, MerchantLedgerEntry, MerchantOrderFulfillment, MerchantWallet, Shop, ShopCategory, Product, ProductCategory
 from services.models import Service, ServiceCategory
-from marketplace.admin import ProductAdmin, activate_products, deactivate_products
+from marketplace.admin import ProductAdmin, ProductCategoryAdmin, activate_products, deactivate_products
+from services.admin import ServiceCategoryAdmin
 from orders.models import Order, ProductOrderItem
 from payments.models import Payment
 
@@ -433,7 +436,11 @@ class MarketplaceAPITest(TestCase):
             is_verified=True,
             status='active',
         )
-        groceries = ProductCategory.objects.create(name='Groceries', slug='groceries')
+        groceries = ProductCategory.objects.create(
+            name='Groceries',
+            slug='groceries',
+            featured_on_homepage=True,
+        )
         liquor = ProductCategory.objects.create(name='Liquor', slug='liquor')
         popular_product = Product.objects.create(
             shop=shop,
@@ -522,6 +529,10 @@ class MarketplaceAPITest(TestCase):
         catalog_response = self.client.get('/services/catalog/?page_size=24&ordering=popular')
 
         self.assertEqual(popularity_response.status_code, 200)
+        self.assertEqual(
+            popularity_response.data['featured_category'],
+            {'type': 'product', 'slug': 'groceries', 'name': 'Groceries'},
+        )
         category_sales = {
             (category['type'], category['slug']): category['units_sold']
             for category in popularity_response.data['categories']
@@ -531,6 +542,35 @@ class MarketplaceAPITest(TestCase):
         self.assertEqual(catalog_response.status_code, 200)
         self.assertEqual(catalog_response.data['results'][0]['id'], popular_product.id)
         self.assertEqual(catalog_response.data['results'][0]['units_sold'], 4)
+
+    def test_admin_featured_category_selection_is_exclusive(self):
+        product_category = ProductCategory.objects.create(
+            name='Groceries',
+            slug='groceries',
+            featured_on_homepage=True,
+        )
+        service_category = ServiceCategory.objects.create(name='Laundry', slug='laundry')
+        request = RequestFactory().post('/admin/')
+
+        service_category.featured_on_homepage = True
+        ServiceCategoryAdmin(ServiceCategory, admin.site).save_model(
+            request,
+            service_category,
+            form=None,
+            change=True,
+        )
+        product_category.refresh_from_db()
+        self.assertFalse(product_category.featured_on_homepage)
+
+        product_category.featured_on_homepage = True
+        ProductCategoryAdmin(ProductCategory, admin.site).save_model(
+            request,
+            product_category,
+            form=None,
+            change=True,
+        )
+        service_category.refresh_from_db()
+        self.assertFalse(service_category.featured_on_homepage)
 
 
 class MerchantDashboardTests(TestCase):

@@ -54,6 +54,10 @@ class ProductCategory(models.Model):
     slug = models.SlugField(max_length=120, unique=True)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
+    featured_on_homepage = models.BooleanField(
+        default=False,
+        help_text='Show this category first on the home page. Selecting it clears the previous featured category.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

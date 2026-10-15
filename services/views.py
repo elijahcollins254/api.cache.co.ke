@@ -11,7 +11,7 @@ from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
-from marketplace.models import Product
+from marketplace.models import Product, ProductCategory
 from marketplace.serializers import ShopSerializer
 from orders.models import OrderItem, ProductOrderItem
 from payments.models import Payment
@@ -237,7 +237,31 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 'slug': slugify(row['category_slug']) or 'services',
                 'units_sold': row['units_sold'],
             })
-        return Response({'categories': categories})
+        featured_service = ServiceCategory.objects.filter(
+            is_active=True,
+            featured_on_homepage=True,
+        ).first()
+        featured_product = ProductCategory.objects.filter(
+            is_active=True,
+            featured_on_homepage=True,
+        ).first()
+        featured_category = None
+        if featured_service:
+            featured_category = {
+                'type': 'service',
+                'slug': featured_service.slug,
+                'name': featured_service.name,
+            }
+        elif featured_product:
+            featured_category = {
+                'type': 'product',
+                'slug': featured_product.slug,
+                'name': featured_product.name,
+            }
+        return Response({
+            'categories': categories,
+            'featured_category': featured_category,
+        })
 
     # public read access, authenticated required to create/update/delete
     def get_permissions(self):
