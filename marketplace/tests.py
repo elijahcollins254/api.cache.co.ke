@@ -404,6 +404,7 @@ class MerchantDashboardTests(TestCase):
         )
         self.customer = User.objects.create_user(username='merchant_customer', password='secret123')
         self.rider = User.objects.create_user(username='merchant_rider', password='secret123', role='rider')
+        self.admin = User.objects.create_user(username='merchant_admin', password='secret123', role='admin')
         self.shop = Shop.objects.create(
             owner=self.merchant,
             name='Merchant Shop',
@@ -459,6 +460,64 @@ class MerchantDashboardTests(TestCase):
         self.assertEqual(accepted.status_code, 200)
         self.assertEqual(prepared.status_code, 200)
         self.assertEqual(prepared.data['fulfillment_status'], MerchantOrderFulfillment.STATUS_PREPARED)
+
+    def test_admin_can_select_merchants_and_view_read_only_dashboard(self):
+        other_user = User.objects.create_user(username='other_dashboard_merchant', password='secret123', role='merchant')
+        other_merchant = MerchantProfile.objects.create(
+            user=other_user,
+            merchant_username='other-dashboard-merchant',
+            business_name='Other Dashboard Merchant',
+            phone='+254700000001',
+        )
+        self.client.force_authenticate(user=self.admin)
+
+        directory = self.client.get('/marketplace/merchant/admin/')
+        orders = self.client.get(f'/marketplace/merchant/orders/?merchant_id={self.merchant.id}')
+        earnings = self.client.get(f'/marketplace/merchant/earnings/?merchant_id={self.merchant.id}')
+        missing_selection = self.client.get('/marketplace/merchant/orders/')
+        fulfillment = self.client.post(
+            f'/marketplace/merchant/orders/{self.order.id}/fulfillment/',
+            {'action': 'accept'},
+            format='json',
+        )
+        withdrawal = self.client.post(
+            '/marketplace/merchant/earnings/',
+            {'amount': '50', 'phone_number': '+254712345678'},
+            format='json',
+        )
+
+        self.assertEqual(directory.status_code, 200)
+        self.assertEqual({item['id'] for item in directory.data['merchants']}, {self.merchant.id, other_merchant.id})
+        self.assertEqual(orders.status_code, 200)
+        self.assertEqual(orders.data['merchant_id'], self.merchant.id)
+        self.assertEqual(len(orders.data['orders']), 1)
+        self.assertEqual(earnings.status_code, 200)
+        self.assertEqual(fulfillment.status_code, 403)
+        self.assertEqual(withdrawal.status_code, 403)
+        self.assertEqual(missing_selection.status_code, 400)
+
+    def test_merchant_cannot_select_another_merchants_dashboard(self):
+        other_user = User.objects.create_user(username='other_shop_owner', password='secret123', role='merchant')
+        other_merchant = MerchantProfile.objects.create(
+            user=other_user,
+            merchant_username='other-shop-owner',
+            business_name='Other Shop Owner',
+            phone='+254700000002',
+        )
+        self.client.force_authenticate(user=self.merchant_user)
+
+        response = self.client.get(f'/marketplace/merchant/orders/?merchant_id={other_merchant.id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['merchant_id'], self.merchant.id)
+        self.assertEqual(len(response.data['orders']), 1)
+
+    def test_non_admin_cannot_list_merchants(self):
+        self.client.force_authenticate(user=self.merchant_user)
+
+        response = self.client.get('/marketplace/merchant/admin/')
+
+        self.assertEqual(response.status_code, 403)
 
     def test_rider_cannot_accept_order_until_merchant_prepares_it(self):
         self.client.force_authenticate(user=self.rider)

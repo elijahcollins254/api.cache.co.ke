@@ -40,13 +40,44 @@ def _merchant_for_request(request):
     return MerchantProfile.objects.filter(user=request.user).first()
 
 
+def _is_admin(request):
+    return request.user.is_staff or request.user.is_superuser or getattr(request.user, 'role', None) == 'admin'
+
+
+def _dashboard_merchant(request):
+    if _is_admin(request):
+        merchant_id = request.query_params.get('merchant_id')
+        if not merchant_id:
+            return None, Response({'detail': 'Select a merchant to view.'}, status=status.HTTP_400_BAD_REQUEST)
+        merchant = MerchantProfile.objects.filter(pk=merchant_id).first()
+        if merchant is None:
+            return None, Response({'detail': 'Merchant profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+    else:
+        merchant = _merchant_for_request(request)
+        if merchant is None:
+            return None, Response({'detail': 'Merchant profile not found.'}, status=status.HTTP_403_FORBIDDEN)
+    return merchant, None
+
+
+class AdminMerchantDirectoryView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if not _is_admin(request):
+            return Response({'detail': 'Administrator access required.'}, status=status.HTTP_403_FORBIDDEN)
+        merchants = MerchantProfile.objects.order_by('business_name').values(
+            'id', 'business_name', 'merchant_username', 'status'
+        )
+        return Response({'merchants': list(merchants)})
+
+
 class MerchantOrdersView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        merchant = _merchant_for_request(request)
-        if merchant is None:
-            return Response({'detail': 'Merchant profile not found.'}, status=status.HTTP_403_FORBIDDEN)
+        merchant, denied = _dashboard_merchant(request)
+        if denied:
+            return denied
 
         from orders.models import Order, ProductOrderItem
 
@@ -57,7 +88,7 @@ class MerchantOrdersView(APIView):
         for order in Order.objects.filter(
             id__in=order_ids,
         ).prefetch_related('product_order_items__product__shop').order_by('-created_at')[:100]:
-            fulfillment, _ = MerchantOrderFulfillment.objects.get_or_create(merchant=merchant, order=order)
+            fulfillment = MerchantOrderFulfillment.objects.filter(merchant=merchant, order=order).first()
             items = [
                 {
                     'name': line.product_name,
@@ -75,18 +106,20 @@ class MerchantOrdersView(APIView):
                 'created_at': order.created_at,
                 'status': order.status,
                 'is_paid': order.is_paid(),
-                'fulfillment_status': fulfillment.status,
+                'fulfillment_status': fulfillment.status if fulfillment else MerchantOrderFulfillment.STATUS_PENDING,
                 'pickup_address': order.pickup_address,
                 'items': items,
                 'total': str(sum((Decimal(item['total']) for item in items), Decimal('0'))),
             })
-        return Response({'merchant': merchant.business_name, 'orders': orders})
+        return Response({'merchant_id': merchant.id, 'merchant': merchant.business_name, 'orders': orders})
 
 
 class MerchantOrderFulfillmentView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, order_id):
+        if _is_admin(request):
+            return Response({'detail': 'Administrators can view merchant orders but cannot fulfill them.'}, status=status.HTTP_403_FORBIDDEN)
         merchant = _merchant_for_request(request)
         if merchant is None:
             return Response({'detail': 'Merchant profile not found.'}, status=status.HTTP_403_FORBIDDEN)
@@ -121,21 +154,18 @@ class MerchantEarningsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def _merchant(self, request):
-        merchant = _merchant_for_request(request)
-        if merchant is None:
-            return None, Response({'detail': 'Merchant profile not found.'}, status=status.HTTP_403_FORBIDDEN)
-        return merchant, None
+        return _dashboard_merchant(request)
 
     def get(self, request):
         merchant, denied = self._merchant(request)
         if denied:
             return denied
-        wallet, _ = MerchantWallet.objects.get_or_create(merchant=merchant)
+        wallet = MerchantWallet.objects.filter(merchant=merchant).first()
         entries = MerchantLedgerEntry.objects.filter(merchant=merchant).select_related('order', 'withdrawal')[:100]
         withdrawals = MerchantWithdrawal.objects.filter(merchant=merchant)[:30]
         return Response({
-            'balance': str(wallet.balance),
-            'phone_number': merchant.phone or request.user.phone or '',
+            'balance': str(wallet.balance if wallet else 0),
+            'phone_number': merchant.phone or (request.user.phone if merchant.user_id == request.user.id else ''),
             'minimum_withdrawal': str(getattr(settings, 'MERCHANT_MIN_WITHDRAWAL_AMOUNT', '50.00')),
             'entries': [{
                 'id': entry.id,
@@ -158,6 +188,8 @@ class MerchantEarningsView(APIView):
         })
 
     def post(self, request):
+        if _is_admin(request):
+            return Response({'detail': 'Administrators can view merchant earnings but cannot request withdrawals.'}, status=status.HTTP_403_FORBIDDEN)
         merchant, denied = self._merchant(request)
         if denied:
             return denied
