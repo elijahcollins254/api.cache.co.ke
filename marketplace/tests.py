@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from rest_framework.test import APIClient
 
-from .models import MerchantProfile, MerchantLedgerEntry, MerchantOrderFulfillment, MerchantWallet, Shop, ShopCategory, Product
+from .models import MerchantProfile, MerchantLedgerEntry, MerchantOrderFulfillment, MerchantWallet, Shop, ShopCategory, Product, ProductCategory
 from services.models import Service, ServiceCategory
 from marketplace.admin import ProductAdmin, activate_products, deactivate_products
 from orders.models import Order, ProductOrderItem
@@ -418,6 +418,119 @@ class MarketplaceAPITest(TestCase):
         self.assertEqual(len(response.data['results']), 1)
         self.assertEqual(response.data['results'][0]['shop']['slug'], 'fresh-basket-shop')
         self.assertIsNotNone(response.data['next'])
+
+    def test_catalog_popularity_uses_paid_non_cancelled_sales(self):
+        merchant = MerchantProfile.objects.create(
+            user=self.user,
+            merchant_username='freshbasket',
+            business_name='Fresh Basket',
+            phone='+254712345678',
+        )
+        shop = Shop.objects.create(
+            owner=merchant,
+            name='Fresh Basket Shop',
+            slug='fresh-basket-shop',
+            is_verified=True,
+            status='active',
+        )
+        groceries = ProductCategory.objects.create(name='Groceries', slug='groceries')
+        liquor = ProductCategory.objects.create(name='Liquor', slug='liquor')
+        popular_product = Product.objects.create(
+            shop=shop,
+            category=groceries,
+            name='Fresh Avocado',
+            price='120.00',
+            stock_quantity=10,
+        )
+        other_product = Product.objects.create(
+            shop=shop,
+            category=liquor,
+            name='Red Wine',
+            price='800.00',
+            stock_quantity=10,
+        )
+
+        paid_order = Order.objects.create(
+            user=self.user,
+            pickup_address='Shop',
+            dropoff_address='Customer',
+        )
+        ProductOrderItem.objects.create(
+            order=paid_order,
+            product=popular_product,
+            product_name=popular_product.name,
+            unit_price=popular_product.price,
+            quantity=4,
+        )
+        ProductOrderItem.objects.create(
+            order=paid_order,
+            product=other_product,
+            product_name=other_product.name,
+            unit_price=other_product.price,
+            quantity=2,
+        )
+        Payment.objects.create(
+            user=self.user,
+            order_id=paid_order.id,
+            amount='2080.00',
+            phone_number='+254712345678',
+            status=Payment.STATUS_SUCCESS,
+        )
+
+        unpaid_order = Order.objects.create(
+            user=self.user,
+            pickup_address='Shop',
+            dropoff_address='Customer',
+        )
+        ProductOrderItem.objects.create(
+            order=unpaid_order,
+            product=other_product,
+            product_name=other_product.name,
+            unit_price=other_product.price,
+            quantity=10,
+        )
+        Payment.objects.create(
+            user=self.user,
+            order_id=unpaid_order.id,
+            amount='8000.00',
+            phone_number='+254712345678',
+            status=Payment.STATUS_FAILED,
+        )
+
+        cancelled_order = Order.objects.create(
+            user=self.user,
+            pickup_address='Shop',
+            dropoff_address='Customer',
+            status='cancelled',
+        )
+        ProductOrderItem.objects.create(
+            order=cancelled_order,
+            product=other_product,
+            product_name=other_product.name,
+            unit_price=other_product.price,
+            quantity=20,
+        )
+        Payment.objects.create(
+            user=self.user,
+            order_id=cancelled_order.id,
+            amount='16000.00',
+            phone_number='+254712345678',
+            status=Payment.STATUS_SUCCESS,
+        )
+
+        popularity_response = self.client.get('/services/catalog/popularity/')
+        catalog_response = self.client.get('/services/catalog/?page_size=24&ordering=popular')
+
+        self.assertEqual(popularity_response.status_code, 200)
+        category_sales = {
+            (category['type'], category['slug']): category['units_sold']
+            for category in popularity_response.data['categories']
+        }
+        self.assertEqual(category_sales[('product', 'groceries')], 4)
+        self.assertEqual(category_sales[('product', 'liquor')], 2)
+        self.assertEqual(catalog_response.status_code, 200)
+        self.assertEqual(catalog_response.data['results'][0]['id'], popular_product.id)
+        self.assertEqual(catalog_response.data['results'][0]['units_sold'], 4)
 
 
 class MerchantDashboardTests(TestCase):

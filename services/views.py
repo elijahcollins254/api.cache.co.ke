@@ -1,6 +1,10 @@
+from datetime import timedelta
+
 from django.core.paginator import EmptyPage, Paginator
-from django.db.models import Q
-from django.db.models.functions import Lower
+from django.db.models import Case, IntegerField, OuterRef, Q, Subquery, Sum, Value, When
+from django.db.models.functions import Coalesce, Lower
+from django.utils import timezone
+from django.utils.text import slugify
 from rest_framework import viewsets, permissions, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, ValidationError
@@ -9,6 +13,8 @@ from rest_framework.response import Response
 
 from marketplace.models import Product
 from marketplace.serializers import ShopSerializer
+from orders.models import OrderItem, ProductOrderItem
+from payments.models import Payment
 from .models import Service, ServiceCategory
 from .serializers import ServiceCategorySerializer, ServiceSerializer
 
@@ -80,6 +86,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             )
 
         paginated = 'page' in request.query_params or 'page_size' in request.query_params
+        popular = request.query_params.get('ordering') == 'popular' and paginated
         page_size = None
         page_number = None
         total_count = None
@@ -95,13 +102,47 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
             total_count = services.count() + products.count()
             fetch_limit = page_number * page_size
-            services = services.order_by(Lower('name'), 'pk')[:fetch_limit]
-            products = products.order_by(Lower('name'), 'pk')[:fetch_limit]
+            if popular:
+                since = timezone.now() - timedelta(days=90)
+                paid_order_ids = Payment.objects.filter(
+                    status=Payment.STATUS_SUCCESS,
+                    order_id__isnull=False,
+                ).values('order_id')
+                service_sales = OrderItem.objects.filter(
+                    service_id=OuterRef('pk'),
+                    order_id__in=paid_order_ids,
+                    order__created_at__gte=since,
+                ).exclude(order__status='cancelled').values('service_id').annotate(
+                    units=Sum('quantity')
+                ).values('units')[:1]
+                product_sales = ProductOrderItem.objects.filter(
+                    product_id=OuterRef('pk'),
+                    order_id__in=paid_order_ids,
+                    order__created_at__gte=since,
+                ).exclude(order__status='cancelled').values('product_id').annotate(
+                    units=Sum('quantity')
+                ).values('units')[:1]
+                services = services.annotate(
+                    units_sold=Coalesce(Subquery(service_sales, output_field=IntegerField()), Value(0))
+                ).order_by('-units_sold', Lower('name'), 'pk')[:fetch_limit]
+                products = products.annotate(
+                    units_sold=Case(
+                        When(
+                            stock_quantity__gt=0,
+                            then=Coalesce(Subquery(product_sales, output_field=IntegerField()), Value(0)),
+                        ),
+                        default=Value(0),
+                        output_field=IntegerField(),
+                    )
+                ).order_by('-units_sold', Lower('name'), 'pk')[:fetch_limit]
+            else:
+                services = services.order_by(Lower('name'), 'pk')[:fetch_limit]
+                products = products.order_by(Lower('name'), 'pk')[:fetch_limit]
 
         catalog = []
 
         for service in services:
-            catalog.append({
+            item = {
                 'id': service.id,
                 'type': 'service',
                 'name': service.name,
@@ -110,10 +151,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 'price': float(service.price),
                 'image_url': service.image_url or (request.build_absolute_uri(service.image.url) if service.image else None),
                 'shop': ShopSerializer(service.shop, context={'request': request}).data if service.shop else None,
-            })
+            }
+            if popular:
+                item['units_sold'] = service.units_sold
+            catalog.append(item)
 
         for product in products:
-            catalog.append({
+            item = {
                 'id': product.id,
                 'type': 'product',
                 'name': product.name,
@@ -125,9 +169,15 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 'stock_quantity': product.stock_quantity,
                 'image_url': product.image_url or (request.build_absolute_uri(product.image.url) if product.image else None),
                 'shop': ShopSerializer(product.shop, context={'request': request}).data if product.shop else None,
-            })
+            }
+            if popular:
+                item['units_sold'] = product.units_sold
+            catalog.append(item)
 
-        catalog.sort(key=lambda item: ((item['name'] or '').lower(), item['type'], item['id']))
+        if popular:
+            catalog.sort(key=lambda item: (-item['units_sold'], (item['name'] or '').lower(), item['type'], item['id']))
+        else:
+            catalog.sort(key=lambda item: ((item['name'] or '').lower(), item['type'], item['id']))
         if paginated:
             start = (page_number - 1) * page_size
             page_items = catalog[start:start + page_size]
@@ -140,8 +190,57 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return paginator.get_paginated_response(page_items)
         return Response(catalog)
 
+    @action(detail=False, methods=['get'], url_path='catalog/popularity')
+    def catalog_popularity(self, request):
+        since = timezone.now() - timedelta(days=90)
+        paid_order_ids = Payment.objects.filter(
+            status=Payment.STATUS_SUCCESS,
+            order_id__isnull=False,
+        ).values('order_id')
+        eligible_orders = Q(order__created_at__gte=since) & ~Q(order__status='cancelled')
+
+        product_sales = ProductOrderItem.objects.filter(
+            eligible_orders,
+            order_id__in=paid_order_ids,
+            product__is_active=True,
+            product__stock_quantity__gt=0,
+            product__shop__status='active',
+            product__shop__is_verified=True,
+        ).annotate(
+            category_slug=Coalesce('product__category__slug', Value('products'))
+        ).values('category_slug').annotate(units_sold=Sum('quantity')).order_by()
+
+        service_sales = OrderItem.objects.filter(
+            eligible_orders,
+            order_id__in=paid_order_ids,
+            service__is_active=True,
+            service__shop__status='active',
+            service__shop__is_verified=True,
+        ).annotate(
+            category_slug=Coalesce(
+                'service__category__slug',
+                'service__category_name',
+                Value('services'),
+            )
+        ).values('category_slug').annotate(units_sold=Sum('quantity')).order_by()
+
+        categories = []
+        for row in product_sales:
+            categories.append({
+                'type': 'product',
+                'slug': slugify(row['category_slug']) or 'products',
+                'units_sold': row['units_sold'],
+            })
+        for row in service_sales:
+            categories.append({
+                'type': 'service',
+                'slug': slugify(row['category_slug']) or 'services',
+                'units_sold': row['units_sold'],
+            })
+        return Response({'categories': categories})
+
     # public read access, authenticated required to create/update/delete
     def get_permissions(self):
-        if self.action in ['list', 'retrieve', 'catalog']:
+        if self.action in ['list', 'retrieve', 'catalog', 'catalog_popularity']:
             return [permissions.AllowAny()]
         return [permissions.IsAuthenticated(), permissions.IsAdminUser()]
