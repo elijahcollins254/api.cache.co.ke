@@ -386,6 +386,39 @@ class MarketplaceAPITest(TestCase):
         self.assertEqual(search_response.data['count'], 1)
         self.assertEqual(search_response.data['results'][0]['name'], 'Red Apple')
 
+    def test_catalog_endpoint_filters_paginated_items_by_shop(self):
+        merchant = MerchantProfile.objects.create(
+            user=self.user,
+            merchant_username='freshbasket',
+            business_name='Fresh Basket',
+            phone='+254712345678',
+        )
+        shop = Shop.objects.create(
+            owner=merchant,
+            name='Fresh Basket Shop',
+            slug='fresh-basket-shop',
+            is_verified=True,
+            status='active',
+        )
+        other_shop = Shop.objects.create(
+            owner=merchant,
+            name='Other Shop',
+            slug='other-shop',
+            is_verified=True,
+            status='active',
+        )
+        Product.objects.create(shop=shop, name='Fresh Avocado', price='120.00')
+        Product.objects.create(shop=shop, name='Red Apple', price='80.00')
+        Product.objects.create(shop=other_shop, name='Other Product', price='50.00')
+
+        response = self.client.get('/services/catalog/?shop=fresh-basket-shop&page_size=1')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 2)
+        self.assertEqual(len(response.data['results']), 1)
+        self.assertEqual(response.data['results'][0]['shop']['slug'], 'fresh-basket-shop')
+        self.assertIsNotNone(response.data['next'])
+
 
 class MerchantDashboardTests(TestCase):
     def setUp(self):

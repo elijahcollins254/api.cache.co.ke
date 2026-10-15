@@ -56,6 +56,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
         products = Product.objects.filter(is_active=True).select_related(
             'shop', 'shop__category', 'shop__owner', 'shop__owner__user'
         )
+        shop_slug = request.query_params.get('shop')
+        if shop_slug:
+            services = services.filter(shop__slug=shop_slug)
+            products = products.filter(shop__slug=shop_slug)
         if not request.user.is_authenticated:
             products = products.filter(shop__is_verified=True, shop__status='active')
 
