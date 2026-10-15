@@ -1,4 +1,5 @@
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -7,7 +8,7 @@ from orders.models import Order
 from payments.models import Payment
 
 from .models import BNPLAccount
-from .services import calculate_credit_limit
+from .services import calculate_credit_limit, notify_boost_transaction
 
 
 class CreditLimitTests(TestCase):
@@ -39,3 +40,11 @@ class CreditLimitTests(TestCase):
         )
 
         self.assertEqual(calculate_credit_limit(self.user), Decimal('75.00'))
+
+    @patch('bnpl.services._send_sms')
+    def test_boost_transaction_message_uses_thirty_day_repayment_period(self, send_sms):
+        account = BNPLAccount.objects.create(user=self.user, phone_number='0712345678')
+
+        notify_boost_transaction(account, Decimal('50.00'))
+
+        self.assertIn('Repay within 30 days.', send_sms.call_args.args[1])
