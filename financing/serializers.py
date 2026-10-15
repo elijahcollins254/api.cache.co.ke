@@ -1,7 +1,16 @@
 # financing/serializers.py
 from rest_framework import serializers
 from decimal import Decimal
-from .models import LoanApplication, LoanCollateral, LoanGuarantor, LoanRepayment, Investment, ShareInvestment
+from .models import (
+    LoanApplication,
+    LoanCollateral,
+    LoanGuarantor,
+    LoanRepayment,
+    Investment,
+    ShareInvestment,
+    SHARE_OFFERING_TARGET_RAISE,
+    SHARE_OFFERING_TARGET_PERCENTAGE,
+)
 from orders.models import Order
 import re
 
@@ -193,7 +202,7 @@ class ShareInvestmentSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_shares_percentage(self, obj):
-        return float(obj.amount * Decimal('10') / Decimal('1000000'))
+        return float(obj.amount * SHARE_OFFERING_TARGET_PERCENTAGE / SHARE_OFFERING_TARGET_RAISE)
 
 
 class CreateShareInvestmentSerializer(serializers.Serializer):

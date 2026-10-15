@@ -10,7 +10,16 @@ from django.db.models.functions import TruncMonth
 from datetime import timedelta
 from payments.models import Payment
 from orders.models import Order
-from .models import LoanApplication, LoanCollateral, LoanGuarantor, LoanRepayment, Investment, ShareInvestment
+from .models import (
+    LoanApplication,
+    LoanCollateral,
+    LoanGuarantor,
+    LoanRepayment,
+    Investment,
+    ShareInvestment,
+    SHARE_OFFERING_TARGET_RAISE,
+    SHARE_OFFERING_TARGET_PERCENTAGE,
+)
 from .serializers import (
     LoanApplicationDetailSerializer,
     LoanApplicationListSerializer,
@@ -627,9 +636,11 @@ class ShareInvestmentViewSet(viewsets.GenericViewSet):
             'fundraising': {
                 'total_raised': float(total_raised),
                 'investor_count': investor_count,
-                'shares_issued_percentage': float(total_raised) / 1000000 * 10,
-                'target_raise': 1000000,
-                'target_shares_percentage': 10,
+                'shares_issued_percentage': float(
+                    total_raised * SHARE_OFFERING_TARGET_PERCENTAGE / SHARE_OFFERING_TARGET_RAISE
+                ),
+                'target_raise': float(SHARE_OFFERING_TARGET_RAISE),
+                'target_shares_percentage': float(SHARE_OFFERING_TARGET_PERCENTAGE),
                 'monthly_raise': months,
             },
             'business': {

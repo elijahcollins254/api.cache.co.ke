@@ -5,6 +5,10 @@ from django.utils import timezone
 from decimal import Decimal
 import uuid
 
+SHARE_OFFERING_TARGET_RAISE = Decimal('100000')
+SHARE_OFFERING_TARGET_PERCENTAGE = Decimal('10')
+
+
 class LoanApplication(models.Model):
     """
     Stores loan applications from users waiting for review and approval.

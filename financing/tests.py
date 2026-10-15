@@ -32,7 +32,7 @@ class ShareInvestmentApiTests(TestCase):
         self.assertEqual(investment.amount, Decimal('1.00'))
         self.assertEqual(investment.phone_number, '254712345678')
         self.assertIsNone(investment.user)
-        self.assertEqual(response.data['shares_percentage'], 0.00001)
+        self.assertEqual(response.data['shares_percentage'], 0.0001)
 
     def test_invalid_phone_is_rejected(self):
         response = self.client.post(
@@ -76,5 +76,7 @@ class ShareInvestmentApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['fundraising']['total_raised'], 100000)
         self.assertEqual(response.data['fundraising']['investor_count'], 1)
-        self.assertEqual(response.data['fundraising']['shares_issued_percentage'], 1)
+        self.assertEqual(response.data['fundraising']['shares_issued_percentage'], 10)
+        self.assertEqual(response.data['fundraising']['target_raise'], 100000)
+        self.assertEqual(response.data['fundraising']['target_shares_percentage'], 10)
         self.assertEqual(len(response.data['business']['monthly_sales']), 6)
