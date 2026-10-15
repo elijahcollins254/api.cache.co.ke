@@ -74,7 +74,7 @@ def b2c_configuration_error():
     return f"Missing B2C configuration: {', '.join(missing)}" if missing else None
 
 
-def initiate_b2c(withdrawal):
+def initiate_b2c(withdrawal, recipient_type='Rider'):
     """Submit an M-Pesa B2C payout; the callback is authoritative for final status."""
     config = _daraja_config()
     error = b2c_configuration_error()
@@ -104,10 +104,10 @@ def initiate_b2c(withdrawal):
         'Amount': int(withdrawal.amount),
         'PartyA': config['shortcode'],
         'PartyB': phone,
-        'Remarks': f'Rider earnings payout {withdrawal.id}',
+        'Remarks': f'{recipient_type} earnings payout {withdrawal.id}',
         'QueueTimeOutURL': timeout_url,
         'ResultURL': result_url,
-        'Occasion': f'RIDER-{withdrawal.id}',
+        'Occasion': f'{recipient_type.upper()}-{withdrawal.id}',
     }
     response = requests.post(
         f"{config['base_url']}/mpesa/b2c/v1/paymentrequest",
@@ -160,8 +160,8 @@ def settle_b2c_callback(payload, timed_out=False):
             Q(conversation_id=conversation_id) | Q(originator_conversation_id=conversation_id)
         )
     except WithdrawalRequest.DoesNotExist:
-        logger.warning('B2C callback for unknown conversation ID %s', conversation_id)
-        return None
+        from marketplace.merchant_payouts import settle_b2c_callback as settle_merchant_callback
+        return settle_merchant_callback(payload, timed_out=timed_out)
 
     if timed_out:
         return fail_withdrawal_and_refund(withdrawal, result.get('ResultDesc') or 'Safaricom payout queue timed out.')

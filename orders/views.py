@@ -480,6 +480,12 @@ class RiderOrderListView(generics.ListAPIView):
                 status__iexact='requested'  # case-insensitive match
             )
             if action == 'accept':
+                from marketplace.merchant_payouts import merchants_prepared_for_pickup
+                if not merchants_prepared_for_pickup(order):
+                    return Response(
+                        {'error': 'The merchant is still preparing this order.'},
+                        status=status.HTTP_409_CONFLICT,
+                    )
                 order.rider = request.user
                 order.status = 'accepted_delivery'
                 order.save()
@@ -513,6 +519,9 @@ class OrderUpdateView(APIView):
                     return Response({'error': 'This order is not assigned to you.'}, status=status.HTTP_403_FORBIDDEN)
                 if order.status != 'accepted_delivery':
                     return Response({'error': 'Accept the delivery before confirming pickup.'}, status=status.HTTP_400_BAD_REQUEST)
+                from marketplace.merchant_payouts import merchants_prepared_for_pickup
+                if not merchants_prepared_for_pickup(order):
+                    return Response({'error': 'The merchant is still preparing this order.'}, status=status.HTTP_409_CONFLICT)
                 order.pickup_confirmed_at = timezone.now()
                 order.status = 'picked'
                 order.picked_at = order.picked_at or timezone.now()
@@ -547,6 +556,9 @@ class OrderUpdateView(APIView):
 
             # A rider may accept only one delivery at a time.
             if request.data.get('status') == 'accepted_delivery':
+                from marketplace.merchant_payouts import merchants_prepared_for_pickup
+                if not merchants_prepared_for_pickup(order):
+                    return Response({'error': 'The merchant is still preparing this order.'}, status=status.HTTP_409_CONFLICT)
                 has_active_delivery = Order.objects.filter(
                     delivery_rider=request.user,
                     status='accepted_delivery',
@@ -586,6 +598,11 @@ class OrderUpdateView(APIView):
             # Determine incoming values and capture old values for audit BEFORE mutating
             new_status = request.data.get('status')
             old_status = order.status
+
+            if new_status and new_status.lower() == 'picked':
+                from marketplace.merchant_payouts import merchants_prepared_for_pickup
+                if not merchants_prepared_for_pickup(order):
+                    return Response({'error': 'The merchant is still preparing this order.'}, status=status.HTTP_409_CONFLICT)
             
             # Validate status transition
             if new_status and not order.can_transition_to(new_status):
@@ -652,6 +669,9 @@ class OrderUpdateView(APIView):
             # Handle pickup rider assignment
             pickup_rider_id = request.data.get('pickup_rider')
             if pickup_rider_id is not None:
+                from marketplace.merchant_payouts import merchants_prepared_for_pickup
+                if not merchants_prepared_for_pickup(order):
+                    return Response({'error': 'The merchant is still preparing this order.'}, status=status.HTTP_409_CONFLICT)
                 try:
                     from users.models import User
                     rider = User.objects.get(id=pickup_rider_id, role='rider', is_active=True)
@@ -681,6 +701,9 @@ class OrderUpdateView(APIView):
             # Handle delivery rider assignment
             delivery_rider_id = request.data.get('delivery_rider')
             if delivery_rider_id is not None:
+                from marketplace.merchant_payouts import merchants_prepared_for_pickup
+                if not merchants_prepared_for_pickup(order):
+                    return Response({'error': 'The merchant is still preparing this order.'}, status=status.HTTP_409_CONFLICT)
                 try:
                     from users.models import User
                     rider = User.objects.get(id=delivery_rider_id, role='rider', is_active=True)
@@ -821,6 +844,8 @@ class OrderUpdateView(APIView):
                     delivery_rider = order.delivery_rider or order.rider
                     if delivery_rider:
                         credit_delivery_earning(order, delivery_rider)
+                    from marketplace.merchant_payouts import credit_completed_order
+                    credit_completed_order(order)
 
             # Accept delivered_at from request (rider marking delivery)
             delivered_at = request.data.get('delivered_at')

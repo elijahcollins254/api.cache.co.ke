@@ -3,9 +3,11 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from rest_framework.test import APIClient
 
-from .models import MerchantProfile, Shop, ShopCategory, Product
+from .models import MerchantProfile, MerchantLedgerEntry, MerchantOrderFulfillment, MerchantWallet, Shop, ShopCategory, Product
 from services.models import Service, ServiceCategory
 from marketplace.admin import ProductAdmin, activate_products, deactivate_products
+from orders.models import Order, ProductOrderItem
+from payments.models import Payment
 
 User = get_user_model()
 
@@ -383,3 +385,109 @@ class MarketplaceAPITest(TestCase):
         self.assertEqual(search_response.status_code, 200)
         self.assertEqual(search_response.data['count'], 1)
         self.assertEqual(search_response.data['results'][0]['name'], 'Red Apple')
+
+
+class MerchantDashboardTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.merchant_user = User.objects.create_user(
+            username='dashboard_merchant',
+            password='SecurePass123',
+            phone='+254712345678',
+            role='merchant',
+        )
+        self.merchant = MerchantProfile.objects.create(
+            user=self.merchant_user,
+            merchant_username='dashboard-merchant',
+            business_name='Dashboard Merchant',
+            phone='+254712345678',
+        )
+        self.customer = User.objects.create_user(username='merchant_customer', password='secret123')
+        self.rider = User.objects.create_user(username='merchant_rider', password='secret123', role='rider')
+        self.shop = Shop.objects.create(
+            owner=self.merchant,
+            name='Merchant Shop',
+            slug='merchant-shop',
+        )
+        self.product = Product.objects.create(
+            shop=self.shop,
+            name='Fresh Produce Box',
+            price='120.00',
+        )
+        self.order = Order.objects.create(
+            user=self.customer,
+            pickup_address='Merchant pickup point',
+            dropoff_address='Customer address',
+            status='requested',
+        )
+        ProductOrderItem.objects.create(
+            order=self.order,
+            product=self.product,
+            product_name=self.product.name,
+            unit_price='120.00',
+            quantity=1,
+        )
+        Payment.objects.create(
+            user=self.customer,
+            order_id=self.order.id,
+            amount='120.00',
+            phone_number='+254712345678',
+            status=Payment.STATUS_SUCCESS,
+        )
+
+    def test_merchant_sees_its_paid_order_and_can_prepare_it(self):
+        self.client.force_authenticate(user=self.merchant_user)
+
+        response = self.client.get('/marketplace/merchant/orders/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['orders']), 1)
+        self.assertEqual(response.data['orders'][0]['items'][0]['name'], 'Fresh Produce Box')
+        self.assertTrue(response.data['orders'][0]['is_paid'])
+
+        accepted = self.client.post(
+            f'/marketplace/merchant/orders/{self.order.id}/fulfillment/',
+            {'action': 'accept'},
+            format='json',
+        )
+        prepared = self.client.post(
+            f'/marketplace/merchant/orders/{self.order.id}/fulfillment/',
+            {'action': 'prepare'},
+            format='json',
+        )
+
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(prepared.status_code, 200)
+        self.assertEqual(prepared.data['fulfillment_status'], MerchantOrderFulfillment.STATUS_PREPARED)
+
+    def test_rider_cannot_accept_order_until_merchant_prepares_it(self):
+        self.client.force_authenticate(user=self.rider)
+
+        response = self.client.post('/orders/rider/', {'order_id': self.order.id, 'action': 'accept'}, format='json')
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIsNone(self.order.rider_id)
+
+    def test_delivery_credits_product_sales_only_once(self):
+        MerchantOrderFulfillment.objects.create(
+            merchant=self.merchant,
+            order=self.order,
+            status=MerchantOrderFulfillment.STATUS_PREPARED,
+        )
+        self.order.status = 'delivered'
+        self.order.save(update_fields=['status', 'updated_at'])
+
+        from .merchant_payouts import credit_completed_order
+        credit_completed_order(self.order)
+        credit_completed_order(self.order)
+
+        wallet = MerchantWallet.objects.get(merchant=self.merchant)
+        self.assertEqual(wallet.balance, 120)
+        self.assertEqual(
+            MerchantLedgerEntry.objects.filter(
+                merchant=self.merchant,
+                order=self.order,
+                entry_type=MerchantLedgerEntry.TYPE_EARNING,
+            ).count(),
+            1,
+        )

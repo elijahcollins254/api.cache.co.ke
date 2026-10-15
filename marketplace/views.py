@@ -1,11 +1,30 @@
 from django.utils.text import slugify
+from django.db import transaction
 from django.db.models import Count, Q
+from django.db.models import F
+from django.utils import timezone
+from django.conf import settings
+from decimal import Decimal, InvalidOperation
+import logging
+import re
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import MerchantProfile, Product, ProductCategory, Shop, ShopCategory
+from .models import (
+    MerchantLedgerEntry,
+    MerchantOrderFulfillment,
+    MerchantProfile,
+    MerchantWallet,
+    MerchantWithdrawal,
+    Product,
+    ProductCategory,
+    Shop,
+    ShopCategory,
+)
+from .merchant_payouts import fail_withdrawal_and_refund
+from riders.payouts import b2c_configuration_error, initiate_b2c
 from .serializers import (
     MerchantProfileSerializer,
     ProductCategorySerializer,
@@ -13,6 +32,193 @@ from .serializers import (
     ShopCategorySerializer,
     ShopSerializer,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _merchant_for_request(request):
+    return MerchantProfile.objects.filter(user=request.user).first()
+
+
+class MerchantOrdersView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        merchant = _merchant_for_request(request)
+        if merchant is None:
+            return Response({'detail': 'Merchant profile not found.'}, status=status.HTTP_403_FORBIDDEN)
+
+        from orders.models import Order, ProductOrderItem
+
+        order_ids = ProductOrderItem.objects.filter(
+            product__shop__owner=merchant,
+        ).values_list('order_id', flat=True).distinct()
+        orders = []
+        for order in Order.objects.filter(
+            id__in=order_ids,
+        ).prefetch_related('product_order_items__product__shop').order_by('-created_at')[:100]:
+            fulfillment, _ = MerchantOrderFulfillment.objects.get_or_create(merchant=merchant, order=order)
+            items = [
+                {
+                    'name': line.product_name,
+                    'quantity': line.quantity,
+                    'unit_price': str(line.unit_price),
+                    'total': str(line.unit_price * line.quantity),
+                    'shop': line.product.shop.name,
+                }
+                for line in order.product_order_items.all()
+                if line.product.shop.owner_id == merchant.id
+            ]
+            orders.append({
+                'id': order.id,
+                'code': order.code,
+                'created_at': order.created_at,
+                'status': order.status,
+                'is_paid': order.is_paid(),
+                'fulfillment_status': fulfillment.status,
+                'pickup_address': order.pickup_address,
+                'items': items,
+                'total': str(sum((Decimal(item['total']) for item in items), Decimal('0'))),
+            })
+        return Response({'merchant': merchant.business_name, 'orders': orders})
+
+
+class MerchantOrderFulfillmentView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, order_id):
+        merchant = _merchant_for_request(request)
+        if merchant is None:
+            return Response({'detail': 'Merchant profile not found.'}, status=status.HTTP_403_FORBIDDEN)
+        from orders.models import Order
+
+        order = Order.objects.filter(
+            pk=order_id,
+            product_order_items__product__shop__owner=merchant,
+        ).distinct().first()
+        if order is None:
+            return Response({'detail': 'Order not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if not order.is_paid():
+            return Response({'detail': 'This order must be paid before fulfillment.'}, status=status.HTTP_400_BAD_REQUEST)
+        if order.status.lower() in ('cancelled', 'delivered'):
+            return Response({'detail': 'This order can no longer be prepared.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        fulfillment, _ = MerchantOrderFulfillment.objects.get_or_create(merchant=merchant, order=order)
+        action = request.data.get('action')
+        transitions = {
+            MerchantOrderFulfillment.STATUS_PENDING: ('accept', MerchantOrderFulfillment.STATUS_ACCEPTED),
+            MerchantOrderFulfillment.STATUS_ACCEPTED: ('prepare', MerchantOrderFulfillment.STATUS_PREPARED),
+        }
+        expected = transitions.get(fulfillment.status)
+        if not expected or action != expected[0]:
+            return Response({'detail': 'Accept the order first, then mark it prepared.'}, status=status.HTTP_400_BAD_REQUEST)
+        fulfillment.status = expected[1]
+        fulfillment.save(update_fields=['status', 'updated_at'])
+        return Response({'fulfillment_status': fulfillment.status})
+
+
+class MerchantEarningsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _merchant(self, request):
+        merchant = _merchant_for_request(request)
+        if merchant is None:
+            return None, Response({'detail': 'Merchant profile not found.'}, status=status.HTTP_403_FORBIDDEN)
+        return merchant, None
+
+    def get(self, request):
+        merchant, denied = self._merchant(request)
+        if denied:
+            return denied
+        wallet, _ = MerchantWallet.objects.get_or_create(merchant=merchant)
+        entries = MerchantLedgerEntry.objects.filter(merchant=merchant).select_related('order', 'withdrawal')[:100]
+        withdrawals = MerchantWithdrawal.objects.filter(merchant=merchant)[:30]
+        return Response({
+            'balance': str(wallet.balance),
+            'phone_number': merchant.phone or request.user.phone or '',
+            'minimum_withdrawal': str(getattr(settings, 'MERCHANT_MIN_WITHDRAWAL_AMOUNT', '50.00')),
+            'entries': [{
+                'id': entry.id,
+                'type': entry.entry_type,
+                'amount': str(entry.amount),
+                'description': entry.description,
+                'order_code': entry.order.code if entry.order_id else None,
+                'withdrawal_id': entry.withdrawal_id,
+                'created_at': entry.created_at,
+            } for entry in entries],
+            'withdrawals': [{
+                'id': item.id,
+                'amount': str(item.amount),
+                'phone_number': item.phone_number,
+                'status': item.status,
+                'transaction_reference': item.transaction_reference,
+                'failure_reason': item.failure_reason,
+                'created_at': item.created_at,
+            } for item in withdrawals],
+        })
+
+    def post(self, request):
+        merchant, denied = self._merchant(request)
+        if denied:
+            return denied
+        config_error = b2c_configuration_error()
+        if config_error:
+            return Response({'detail': 'M-Pesa payouts are not configured yet.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        try:
+            amount = Decimal(str(request.data.get('amount', '')).strip())
+        except (InvalidOperation, ValueError):
+            return Response({'amount': 'Enter a valid amount.'}, status=status.HTTP_400_BAD_REQUEST)
+        minimum = Decimal(str(getattr(settings, 'MERCHANT_MIN_WITHDRAWAL_AMOUNT', '50.00')))
+        if not amount.is_finite() or amount <= 0 or amount != amount.to_integral_value() or amount < minimum:
+            return Response({'amount': f'Enter a whole KES amount of at least {minimum}.'}, status=status.HTTP_400_BAD_REQUEST)
+        from users.models import format_phone_number
+        phone = format_phone_number(str(request.data.get('phone_number') or merchant.phone or '').strip())
+        if not phone or not re.fullmatch(r'\+254(?:7|1)\d{8}', phone):
+            return Response({'phone_number': 'Enter a valid Kenyan M-Pesa number.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            wallet, _ = MerchantWallet.objects.get_or_create(merchant=merchant)
+            wallet = MerchantWallet.objects.select_for_update().get(pk=wallet.pk)
+            if wallet.balance < amount:
+                return Response({'amount': 'Insufficient available earnings.'}, status=status.HTTP_400_BAD_REQUEST)
+            withdrawal = MerchantWithdrawal.objects.create(
+                merchant=merchant,
+                amount=amount,
+                phone_number=phone,
+                status=MerchantWithdrawal.STATUS_PENDING,
+            )
+            MerchantLedgerEntry.objects.create(
+                merchant=merchant,
+                withdrawal=withdrawal,
+                entry_type=MerchantLedgerEntry.TYPE_WITHDRAWAL,
+                amount=amount,
+                description=f'M-Pesa payout #{withdrawal.pk}',
+            )
+            MerchantWallet.objects.filter(pk=wallet.pk).update(
+                balance=F('balance') - amount,
+                updated_at=timezone.now(),
+            )
+        try:
+            result = initiate_b2c(withdrawal, recipient_type='Merchant')
+        except Exception as exc:
+            logger.exception('Could not submit merchant withdrawal %s to Daraja', withdrawal.pk)
+            withdrawal = fail_withdrawal_and_refund(withdrawal, str(exc))
+            return Response({
+                'detail': 'M-Pesa payout could not be started. The amount has been returned to your balance.',
+                'withdrawal_id': withdrawal.pk,
+                'status': withdrawal.status,
+            }, status=status.HTTP_502_BAD_GATEWAY)
+        withdrawal.status = MerchantWithdrawal.STATUS_PROCESSING
+        withdrawal.conversation_id = str(result.get('ConversationID') or '')
+        withdrawal.originator_conversation_id = str(result.get('OriginatorConversationID') or '')
+        withdrawal.save(update_fields=['status', 'conversation_id', 'originator_conversation_id', 'updated_at'])
+        return Response({
+            'id': withdrawal.pk,
+            'amount': str(withdrawal.amount),
+            'phone_number': withdrawal.phone_number,
+            'status': withdrawal.status,
+            'message': 'Payout sent to M-Pesa. Its status will update when Safaricom confirms it.',
+        }, status=status.HTTP_201_CREATED)
 
 
 class MerchantProfileViewSet(viewsets.ModelViewSet):

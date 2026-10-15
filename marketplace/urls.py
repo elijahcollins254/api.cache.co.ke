@@ -2,6 +2,9 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+	MerchantEarningsView,
+	MerchantOrderFulfillmentView,
+	MerchantOrdersView,
 	MerchantProfileViewSet,
 	ProductCategoryViewSet,
 	ProductViewSet,
@@ -17,4 +20,9 @@ router.register('product-categories', ProductCategoryViewSet, basename='product-
 router.register('shops', ShopViewSet, basename='shop')
 router.register('products', ProductViewSet, basename='product')
 
-urlpatterns = [path('', include(router.urls))]
+urlpatterns = [
+	path('merchant/orders/', MerchantOrdersView.as_view(), name='merchant-orders'),
+	path('merchant/orders/<int:order_id>/fulfillment/', MerchantOrderFulfillmentView.as_view(), name='merchant-order-fulfillment'),
+	path('merchant/earnings/', MerchantEarningsView.as_view(), name='merchant-earnings'),
+	path('', include(router.urls)),
+]
