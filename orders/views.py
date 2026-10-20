@@ -1268,11 +1268,6 @@ class OrderListCreateView(generics.ListCreateAPIView):
             'pickup_rider', 'delivery_rider', 'created_by', 'review'
         )
         
-        # Filter by order code if provided
-        code = self.request.query_params.get("code")
-        if code:
-            return queryset.filter(code__iexact=code.strip())
-
         # Riders should see only orders assigned through any rider field.
         # Keep this before the staff location filter because riders may also
         # have staff privileges, but must not receive every order at a location.
@@ -1303,6 +1298,18 @@ class OrderListCreateView(generics.ListCreateAPIView):
         # For regular users, show only their orders
         elif user.is_authenticated and not user.is_staff and not is_admin:
             queryset = queryset.filter(user=user)
+
+        # Accept the order's database ID as a fallback for older clients that
+        # did not receive the public order code in the list response.
+        code = self.request.query_params.get("code")
+        if code:
+            code_value = code.strip()
+            code_filter = models.Q(code__iexact=code_value)
+            if code_value.isdecimal():
+                order_id = int(code_value)
+                if order_id <= 2147483647:
+                    code_filter |= models.Q(pk=order_id)
+            return queryset.filter(code_filter)
         
         # === BACKEND FILTERING SUPPORT (for performance optimization) ===
         

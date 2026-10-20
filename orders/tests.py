@@ -125,6 +125,34 @@ class OrderDeliveryVerificationTests(TestCase):
             'phone': self.rider.phone,
         })
 
+    def test_order_list_lookup_accepts_numeric_id_and_stays_user_scoped(self):
+        own_order = Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate B',
+            price=Decimal('1000.00'),
+            service_location=self.location,
+        )
+        another_customer = User.objects.create_user(
+            username='another_customer',
+            password='secret123',
+            role='customer',
+        )
+        Order.objects.create(
+            user=another_customer,
+            pickup_address='Other Road',
+            dropoff_address='Other Gate',
+            price=Decimal('2000.00'),
+            service_location=self.location,
+        )
+        client = APIClient()
+        client.force_authenticate(user=self.customer)
+
+        response = client.get(f'/orders/?code={own_order.id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item['id'] for item in response.data['results']], [own_order.id])
+
     def test_code_filtered_orders_use_the_full_serializer(self):
         view = OrderListCreateView()
         view.request = SimpleNamespace(

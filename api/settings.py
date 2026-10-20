@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'subscriptions',
     'financing',
     'casino',
+    'analytics.apps.AnalyticsConfig',
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',
@@ -267,5 +268,4 @@ AFRICAS_TALKING_API_KEY = os.getenv('AFRICAS_TALKING_API_KEY', '')
 AFRICAS_TALKING_USERNAME = os.getenv('AFRICAS_TALKING_USERNAME', 'sandbox')
 AFRICAS_TALKING_SENDER_ID = os.getenv('AFRICAS_TALKING_SENDER_ID', 'cache')
 ADMIN_PHONE_NUMBER = os.getenv('ADMIN_PHONE_NUMBER', '+254712345678')  # Default admin phone, update in .env
-
 

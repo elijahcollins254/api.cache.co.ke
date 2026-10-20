@@ -3,11 +3,13 @@ from django.test import TestCase
 from django.utils import timezone
 from decimal import Decimal
 from datetime import timedelta
+from unittest.mock import patch
 
 from bnpl.models import BNPLAccount
 from orders.models import Order
 from payments.models import Payment
 from payments.views import get_order_payment_progress, release_expired_boost_checkout
+from rest_framework.test import APIClient
 from services.models import Service
 from users.models import Location
 
@@ -94,3 +96,58 @@ class PaymentProgressTests(TestCase):
         self.assertEqual(boost_payment.status, Payment.STATUS_FAILED)
         self.assertEqual(stk_payment.status, Payment.STATUS_FAILED)
         self.assertFalse(release_expired_boost_checkout(stk_payment))
+
+
+class PaymentEndpointTests(TestCase):
+    def setUp(self):
+        self.customer = User.objects.create_user(
+            username='payment_customer',
+            password='secret123',
+            role='customer',
+            phone='0712345678',
+        )
+        self.order = Order.objects.create(
+            user=self.customer,
+            pickup_address='Main Road',
+            dropoff_address='Gate B',
+            price=Decimal('1000.00'),
+        )
+        self.client = APIClient()
+
+    def test_mpesa_payment_links_to_order_primary_key(self):
+        with (
+            self.settings(MPESA_CONSUMER_KEY='test-key', MPESA_CONSUMER_SECRET='test-secret'),
+            patch('payments.views.MpesaSTKPushView._get_access_token', return_value='test-token'),
+            patch(
+                'payments.views.MpesaSTKPushView._initiate_stk_push',
+                return_value={'CheckoutRequestID': 'ws_CO_test'},
+            ),
+        ):
+            response = self.client.post(
+                '/payments/mpesa/stk-push/',
+                {
+                    'amount': 1000,
+                    'phone': '0712345678',
+                    'order_id': self.order.code,
+                },
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payment = Payment.objects.get(provider_reference='ws_CO_test')
+        self.assertEqual(payment.order_id, self.order.id)
+        self.assertEqual(payment.raw_payload['order_reference'], self.order.code)
+
+    def test_boost_opt_in_returns_active_account(self):
+        self.client.force_authenticate(user=self.customer)
+
+        with patch('payments.views.notify_boost_opted_in'):
+            response = self.client.post(
+                '/payments/bnpl/opt_in/',
+                {'phone_number': self.customer.phone},
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.data['is_enrolled'])
+        self.assertTrue(BNPLAccount.objects.get(user=self.customer).is_active)

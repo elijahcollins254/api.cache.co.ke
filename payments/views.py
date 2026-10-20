@@ -1148,38 +1148,15 @@ class MpesaSTKPushView(views.APIView):
         if validation_error:
             return validation_error
         
-        # Store original order_id for reference, extract numeric part if available
-        order_reference = order_id
         order_id_numeric = None
-        
-        # Try to extract numeric part from order_id (e.g., 'WW-00176' -> 176)
-        if isinstance(order_id, str):
-            import re
-            # Try to find regular order IDs first (WW-00225 format)
-            numeric_matches = re.findall(r'\d+', order_id)
-            if numeric_matches:
-                try:
-                    # Use the first number (usually the order number)
-                    first_num = int(numeric_matches[0])
-                    # Ensure it fits in PositiveIntegerField (max 2147483647)
-                    if first_num <= 2147483647:
-                        order_id_numeric = first_num
-                    else:
-                        # If too large, use modulo
-                        order_id_numeric = first_num % 1000000
-                except (ValueError, TypeError):
-                    pass
-            
-            # If we couldn't extract a number, use hash of the string
-            if order_id_numeric is None:
-                order_id_numeric = abs(hash(order_id)) % 1000000
-        else:
+        if order_id is not None and order_id != 'GAME_WALLET_TOPUP':
             try:
-                order_id_numeric = int(order_id)
-                if order_id_numeric > 2147483647:
-                    order_id_numeric = order_id_numeric % 1000000
-            except (ValueError, TypeError):
-                order_id_numeric = None
+                order_id_numeric = Order.objects.only('id').get(code=order_id).id
+            except Order.DoesNotExist:
+                return Response(
+                    {'detail': f'Order not found: {order_id}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         
         # Validate phone number format (Kenyan format)
         if not self._validate_phone(phone):

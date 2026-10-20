@@ -63,5 +63,6 @@ class ProductAdmin(admin.ModelAdmin):
     list_display = ('name', 'category', 'shop', 'price', 'stock_quantity', 'is_active')
     list_filter = ('category', 'shop', 'is_active')
     search_fields = ('name', 'description', 'category__name', 'shop__name')
+    autocomplete_fields = ('shop', 'category')
     prepopulated_fields = {'slug': ('name',)}
     actions = [activate_products, deactivate_products]

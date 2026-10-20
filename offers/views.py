@@ -1,11 +1,12 @@
 from rest_framework import viewsets, status
+from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.utils import timezone
 from django.db import models
 from django.http import JsonResponse
-from .models import Offer, UserOffer, OfferNotificationSubscription
+from .models import Offer, UserOffer, OfferNotificationSubscription, OfferPushDevice
 from .serializers import OfferSerializer, UserOfferSerializer, OfferNotificationSubscriptionSerializer
 from .services import send_offer_claim_confirmation, send_subscription_confirmation
 
@@ -157,19 +158,53 @@ class OfferSubscriptionViewSet(viewsets.ViewSet):
         subscriptions = OfferNotificationSubscription.objects.filter(is_active=True).exclude(
             phone_number__isnull=True
         ).exclude(phone_number='')
-        
-        # Return only phone numbers as a simple list
+
         phone_numbers = [sub.phone_number for sub in subscriptions]
-        
+
         response = Response({
             'count': len(phone_numbers),
             'phone_numbers': phone_numbers,
             'timestamp': timezone.now()
         })
-        
-        # Add CORS headers for cross-origin requests
+
         response['Access-Control-Allow-Origin'] = '*'
         response['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
         response['Access-Control-Allow-Headers'] = 'Content-Type'
-        
+
         return response
+
+
+class OfferPushDeviceView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        token = request.data.get('token')
+        if (
+            not isinstance(token, str)
+            or not token.startswith(('ExponentPushToken[', 'ExpoPushToken['))
+            or not token.endswith(']')
+        ):
+            return Response(
+                {'detail': 'A valid Expo push token is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        device, created = OfferPushDevice.objects.update_or_create(
+            token=token,
+            defaults={'user': request.user},
+        )
+        return Response(
+            {'registered': True, 'id': device.pk},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    def delete(self, request):
+        token = request.data.get('token')
+        if not isinstance(token, str) or not token:
+            return Response(
+                {'detail': 'A push token is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        OfferPushDevice.objects.filter(user=request.user, token=token).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

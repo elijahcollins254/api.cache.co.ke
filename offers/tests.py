@@ -1,11 +1,15 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from django.contrib import admin
+from django.test import RequestFactory, TestCase
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from users.models import User
 
-from offers.models import Offer, UserOffer
+from offers.admin import OfferAdmin
+from offers.models import Offer, OfferPushDevice, UserOffer
+from offers.services import notify_push_devices_of_new_offer
 
 
 class OfferClaimNotificationTests(APITestCase):
@@ -45,3 +49,105 @@ class OfferClaimNotificationTests(APITestCase):
         self.assertEqual(response.status_code, 201)
         self.assertTrue(UserOffer.objects.filter(user=self.user, offer=self.offer).exists())
         self.assertEqual(response.data['sms_notification'], 'Offer claimed, but the confirmation SMS could not be sent.')
+
+
+class OfferPushDeviceTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='push-customer',
+            password='test-password',
+            phone='0712345678',
+        )
+        self.client.force_authenticate(user=self.user)
+        self.url = '/offers/push-devices/'
+
+    def test_registers_push_token_for_authenticated_user(self):
+        response = self.client.post(
+            self.url,
+            {'token': 'ExponentPushToken[device-token]'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            OfferPushDevice.objects.filter(
+                user=self.user,
+                token='ExponentPushToken[device-token]',
+            ).exists()
+        )
+
+    def test_rejects_invalid_push_token(self):
+        response = self.client.post(self.url, {'token': 'not-an-expo-token'}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(OfferPushDevice.objects.count(), 0)
+
+    def test_unregister_only_removes_current_users_device(self):
+        other_user = User.objects.create_user(username='other-push-user', password='test-password')
+        device = OfferPushDevice.objects.create(
+            user=other_user,
+            token='ExponentPushToken[other-device]',
+        )
+
+        response = self.client.delete(
+            self.url,
+            {'token': device.token},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertTrue(OfferPushDevice.objects.filter(pk=device.pk).exists())
+
+
+class OfferPushDeliveryTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='offer-push-user', password='test-password')
+        self.offer = Offer.objects.create(
+            title='Weekend Wash',
+            description='Save on weekend laundry.',
+            discount_percent=20,
+            code='WEEKEND20',
+            valid_from=timezone.now(),
+        )
+
+    @patch('offers.services.requests.post')
+    def test_sends_offer_push_to_registered_device(self, post):
+        OfferPushDevice.objects.create(
+            user=self.user,
+            token='ExponentPushToken[device-token]',
+        )
+        response = Mock()
+        response.json.return_value = {'data': [{'status': 'ok'}]}
+        post.return_value = response
+
+        result = notify_push_devices_of_new_offer(self.offer)
+
+        self.assertEqual(result, {'sent': 1, 'failed': 0})
+        post.assert_called_once()
+        message = post.call_args.kwargs['json'][0]
+        self.assertEqual(message['to'], 'ExponentPushToken[device-token]')
+        self.assertEqual(message['title'], 'New offer: Weekend Wash')
+        self.assertEqual(message['data'], {'screen': '/offers', 'offerId': self.offer.pk})
+
+    @patch('offers.admin.notify_subscribers_of_new_offer')
+    @patch('offers.admin.notify_push_devices_of_new_offer')
+    def test_admin_creation_sends_push_for_active_offer(self, notify_push, notify_sms):
+        admin_user = User.objects.create_superuser(
+            username='offer-admin',
+            password='test-password',
+            phone='0711111111',
+        )
+        request = RequestFactory().post('/admin/offers/offer/add/')
+        request.user = admin_user
+        offer = Offer(
+            title='New Offer',
+            description='A new discount.',
+            discount_percent=10,
+            code='NEWOFFER',
+            valid_from=timezone.now(),
+        )
+
+        OfferAdmin(Offer, admin.site).save_model(request, offer, form=None, change=False)
+
+        notify_push.assert_called_once_with(offer)
+        notify_sms.assert_called_once_with(offer)

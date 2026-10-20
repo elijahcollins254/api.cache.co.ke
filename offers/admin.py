@@ -1,6 +1,6 @@
 from django.contrib import admin
 from .models import Offer, UserOffer, OfferNotificationSubscription
-from .services import notify_subscribers_of_new_offer
+from .services import notify_push_devices_of_new_offer, notify_subscribers_of_new_offer
 
 @admin.register(Offer)
 class OfferAdmin(admin.ModelAdmin):
@@ -13,6 +13,7 @@ class OfferAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
         if not change and obj.is_active:
             notify_subscribers_of_new_offer(obj)
+            notify_push_devices_of_new_offer(obj)
 
 @admin.register(UserOffer)
 class UserOfferAdmin(admin.ModelAdmin):
