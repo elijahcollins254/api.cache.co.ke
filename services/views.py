@@ -48,12 +48,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
         shop_slug = self.request.query_params.get('shop')
         if shop_slug:
             queryset = queryset.filter(shop__slug=shop_slug)
-        if self.action in ['list', 'retrieve']:
+        if self.action in ['list', 'retrieve', 'catalog']:
             queryset = queryset.filter(is_active=True)
             queryset = queryset.exclude(shop__isnull=True)
             queryset = queryset.filter(shop__status='active')
-            if not self.request.user.is_authenticated:
-                queryset = queryset.filter(shop__is_verified=True)
+            queryset = queryset.filter(shop__is_verified=True)
         return queryset
 
     @action(detail=False, methods=['get'], url_path='catalog')
@@ -66,8 +65,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if shop_slug:
             services = services.filter(shop__slug=shop_slug)
             products = products.filter(shop__slug=shop_slug)
-        if not request.user.is_authenticated:
-            products = products.filter(shop__is_verified=True, shop__status='active')
+        products = products.filter(shop__is_verified=True, shop__status='active')
 
         search = request.query_params.get('search', '').strip()
         if search:

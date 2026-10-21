@@ -258,6 +258,12 @@ class MerchantProfileViewSet(viewsets.ModelViewSet):
     serializer_class = MerchantProfileSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.action in ['list', 'retrieve']:
+            return qs.filter(is_verified=True)
+        return qs
+
     @action(detail=False, methods=['get'])
     def me(self, request):
         merchant, _ = MerchantProfile.objects.get_or_create(
@@ -302,13 +308,22 @@ class MerchantProfileViewSet(viewsets.ModelViewSet):
 
 
 class ShopCategoryViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = ShopCategory.objects.filter(is_active=True).order_by('name')
+    queryset = ShopCategory.objects.filter(
+        is_active=True,
+        shops__status='active',
+        shops__is_verified=True,
+    ).distinct().order_by('name')
     serializer_class = ShopCategorySerializer
     permission_classes = [permissions.AllowAny]
 
 
 class ProductCategoryViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = ProductCategory.objects.filter(is_active=True).order_by('name')
+    queryset = ProductCategory.objects.filter(
+        is_active=True,
+        products__is_active=True,
+        products__shop__status='active',
+        products__shop__is_verified=True,
+    ).distinct().order_by('name')
     serializer_class = ProductCategorySerializer
     permission_classes = [permissions.AllowAny]
 
@@ -326,9 +341,9 @@ class ShopViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
-        if self.request.user.is_authenticated:
-            return qs
-        return qs.filter(status='active', is_verified=True)
+        if self.action in ['list', 'retrieve', 'products']:
+            return qs.filter(status='active', is_verified=True)
+        return qs
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve', 'products']:
@@ -373,6 +388,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             qs = qs.filter(shop__slug=shop_slug)
         if self.action in ['list', 'retrieve']:
             qs = qs.filter(shop__is_verified=True, shop__status='active')
+            return qs.distinct()
         if self.request.user.is_authenticated:
             merchant = MerchantProfile.objects.filter(user=self.request.user).first()
             if merchant:

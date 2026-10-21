@@ -239,6 +239,7 @@ class MarketplaceAPITest(TestCase):
             },
             format='json',
         )
+        Shop.objects.filter(slug='fresh-basket-shop').update(is_verified=True)
         categories_response = self.client.get('/marketplace/categories/')
 
         self.assertEqual(create_response.status_code, 201)
@@ -248,6 +249,98 @@ class MarketplaceAPITest(TestCase):
         if isinstance(categories, dict):
             categories = categories.get('results', [])
         self.assertTrue(any(item['slug'] == 'groceries' for item in categories))
+
+    def test_marketplace_public_endpoints_hide_unverified_shops_and_products(self):
+        merchant = MerchantProfile.objects.create(
+            user=self.user,
+            merchant_username='freshbasket',
+            business_name='Fresh Basket',
+            phone='+254712345678',
+        )
+        visible_shop_category = ShopCategory.objects.create(name='Groceries', slug='groceries')
+        hidden_shop_category = ShopCategory.objects.create(name='Hidden Shops', slug='hidden-shops')
+        visible_product_category = ProductCategory.objects.create(name='Produce', slug='produce')
+        hidden_product_category = ProductCategory.objects.create(name='Hidden Products', slug='hidden-products')
+        visible_shop = Shop.objects.create(
+            owner=merchant,
+            category=visible_shop_category,
+            name='Visible Shop',
+            slug='visible-shop',
+            is_verified=True,
+            status='active',
+        )
+        hidden_shop = Shop.objects.create(
+            owner=merchant,
+            category=hidden_shop_category,
+            name='Hidden Shop',
+            slug='hidden-shop',
+            is_verified=False,
+            status='active',
+        )
+        visible_product = Product.objects.create(
+            shop=visible_shop,
+            category=visible_product_category,
+            name='Visible Product',
+            price='100.00',
+        )
+        hidden_product = Product.objects.create(
+            shop=hidden_shop,
+            category=hidden_product_category,
+            name='Hidden Product',
+            price='50.00',
+        )
+        self.client.force_authenticate(user=self.user)
+
+        endpoints = [
+            ('/marketplace/categories/', 'name', {'Groceries'}),
+            ('/marketplace/product-categories/', 'name', {'Produce'}),
+            ('/marketplace/products/', 'name', {'Visible Product'}),
+        ]
+        for endpoint, key, expected_values in endpoints:
+            with self.subTest(endpoint=endpoint):
+                response = self.client.get(endpoint)
+                self.assertEqual(response.status_code, 200)
+                results = response.data.get('results', response.data) if isinstance(response.data, dict) else response.data
+                self.assertEqual({item[key] for item in results}, expected_values)
+
+        shops_response = self.client.get('/marketplace/shops/')
+        self.assertEqual(shops_response.status_code, 200)
+        shops = shops_response.data.get('results', shops_response.data) if isinstance(shops_response.data, dict) else shops_response.data
+        shop_slugs = {shop['slug'] for shop in shops}
+        self.assertIn('visible-shop', shop_slugs)
+        self.assertNotIn(hidden_shop.slug, shop_slugs)
+
+        self.assertEqual(self.client.get(f'/marketplace/shops/{hidden_shop.slug}/').status_code, 404)
+        self.assertEqual(self.client.get(f'/marketplace/products/{hidden_product.id}/').status_code, 404)
+        self.assertNotEqual(visible_product.id, hidden_product.id)
+
+    def test_merchant_directory_hides_unverified_profiles(self):
+        MerchantProfile.objects.create(
+            user=self.user,
+            merchant_username='unverified-merchant',
+            business_name='Unverified Merchant',
+            phone='+254712345678',
+        )
+        verified_user = User.objects.create_user(
+            username='verified_merchant',
+            email='verified_merchant@example.com',
+            password='SecurePass123',
+            phone='+254712345679',
+        )
+        MerchantProfile.objects.create(
+            user=verified_user,
+            merchant_username='verified-merchant',
+            business_name='Verified Merchant',
+            phone='+254712345679',
+            is_verified=True,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get('/marketplace/merchants/')
+
+        self.assertEqual(response.status_code, 200)
+        results = response.data.get('results', response.data) if isinstance(response.data, dict) else response.data
+        self.assertEqual([merchant['merchant_username'] for merchant in results], ['verified-merchant'])
 
     def test_authenticated_merchant_can_create_product(self):
         self.client.force_authenticate(user=self.user)
@@ -312,6 +405,36 @@ class MarketplaceAPITest(TestCase):
         self.assertGreater(len(response.data), 0)
         self.assertIsInstance(response.data[0]['shop'], dict)
         self.assertEqual(response.data[0]['shop']['merchant_username'], 'freshbasket')
+
+    def test_authenticated_catalog_hides_unverified_shop_products(self):
+        merchant = MerchantProfile.objects.create(
+            user=self.user,
+            merchant_username='freshbasket',
+            business_name='Fresh Basket',
+            phone='+254712345678',
+        )
+        visible_shop = Shop.objects.create(
+            owner=merchant,
+            name='Visible Shop',
+            slug='visible-shop',
+            is_verified=True,
+            status='active',
+        )
+        hidden_shop = Shop.objects.create(
+            owner=merchant,
+            name='Hidden Shop',
+            slug='hidden-shop',
+            is_verified=False,
+            status='active',
+        )
+        Product.objects.create(shop=visible_shop, name='Visible Product', price='100.00')
+        Product.objects.create(shop=hidden_shop, name='Hidden Product', price='50.00')
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get('/services/catalog/?page_size=24')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual({item['name'] for item in response.data['results']}, {'Visible Product'})
 
     def test_catalog_endpoint_returns_services_and_products(self):
         merchant = MerchantProfile.objects.create(
