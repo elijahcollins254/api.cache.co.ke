@@ -527,9 +527,16 @@ class OrderListSerializer(serializers.ModelSerializer):
     
     def get_is_paid(self, obj):
         """Return true only when the full payable amount has been received."""
-        from payments.views import get_order_payment_progress
-        _total, _paid, remaining = get_order_payment_progress(obj)
+        _total, _paid, remaining = self.get_order_payment_progress(obj)
         return remaining is not None and remaining <= Decimal('0.01')
+
+    def get_order_payment_progress(self, obj):
+        if not hasattr(self, '_payment_progress_cache'):
+            self._payment_progress_cache = {}
+        if obj.pk not in self._payment_progress_cache:
+            from payments.views import get_order_payment_progress
+            self._payment_progress_cache[obj.pk] = get_order_payment_progress(obj)
+        return self._payment_progress_cache[obj.pk]
 
     def get_delivery_code(self, obj):
         request = self.context.get('request')
@@ -563,25 +570,13 @@ class OrderListSerializer(serializers.ModelSerializer):
         return review.rating if review else None
 
     def get_paid_amount(self, obj):
-        from payments.views import get_order_payment_progress
-        _total, paid, _remaining = get_order_payment_progress(obj)
+        _total, paid, _remaining = self.get_order_payment_progress(obj)
         return paid
 
     def get_remaining_amount(self, obj):
-        from payments.views import get_order_payment_progress
-        _total, _paid, remaining = get_order_payment_progress(obj)
+        _total, _paid, remaining = self.get_order_payment_progress(obj)
         return remaining
     
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Cache services and rider data to avoid multiple DB hits
-        if isinstance(self.instance, list):
-            self._services_cache = {}
-            for order in self.instance:
-                self._services_cache[order.id] = list(order.services.all().values('id', 'name', 'price'))
-        elif self.instance:
-            self._services_cache = {self.instance.id: list(self.instance.services.all().values('id', 'name', 'price'))}
-
     def get_user(self, obj):
         if not obj.user:
             return None

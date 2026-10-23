@@ -1266,6 +1266,8 @@ class OrderListCreateView(generics.ListCreateAPIView):
         ).select_related(
             'user', 'service', 'rider', 'service_location', 
             'pickup_rider', 'delivery_rider', 'created_by', 'review'
+        ).prefetch_related(
+            'order_items__service', 'product_order_items'
         )
         
         # Riders should see only orders assigned through any rider field.
