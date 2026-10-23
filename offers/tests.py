@@ -8,7 +8,7 @@ from rest_framework.test import APITestCase
 from users.models import User
 
 from offers.admin import OfferAdmin
-from offers.models import Offer, OfferPushDevice, UserOffer
+from offers.models import Offer, OfferNotificationSubscription, OfferPushDevice, UserOffer
 from offers.services import notify_push_devices_of_new_offer
 
 
@@ -49,6 +49,41 @@ class OfferClaimNotificationTests(APITestCase):
         self.assertEqual(response.status_code, 201)
         self.assertTrue(UserOffer.objects.filter(user=self.user, offer=self.offer).exists())
         self.assertEqual(response.data['sms_notification'], 'Offer claimed, but the confirmation SMS could not be sent.')
+
+
+class OfferSubscriptionTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='subscription-customer',
+            password='test-password',
+            phone='0712345678',
+        )
+        self.client.force_authenticate(user=self.user)
+
+    @patch('offers.services.send_offer_sms')
+    def test_subscribing_does_not_send_sms(self, send_sms):
+        response = self.client.post('/offers/subscriptions/my_subscription')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            OfferNotificationSubscription.objects.get(user=self.user).is_active
+        )
+        send_sms.assert_not_called()
+
+    @patch('offers.services.send_offer_sms')
+    def test_unsubscribing_does_not_send_sms(self, send_sms):
+        subscription = OfferNotificationSubscription.objects.create(
+            user=self.user,
+            phone_number=self.user.phone,
+            is_active=True,
+        )
+
+        response = self.client.post('/offers/subscriptions/unsubscribe')
+
+        self.assertEqual(response.status_code, 200)
+        subscription.refresh_from_db()
+        self.assertFalse(subscription.is_active)
+        send_sms.assert_not_called()
 
 
 class OfferPushDeviceTests(APITestCase):

@@ -30,16 +30,6 @@ def send_offer_sms(phone_number, message):
         }
 
 
-def send_subscription_confirmation(subscription, opted_in):
-    """Confirm an offer-notification subscription change by SMS."""
-    action = 'subscribed to' if opted_in else 'unsubscribed from'
-    message = (
-        f"CACHE INDUSTRIES: You have successfully {action} new offer SMS notifications. "
-        "You can change this anytime from your profile."
-    )
-    return send_offer_sms(subscription.phone_number, message)
-
-
 def send_offer_claim_confirmation(user, offer: Offer):
     """Confirm an offer claim by SMS."""
     discount = (
