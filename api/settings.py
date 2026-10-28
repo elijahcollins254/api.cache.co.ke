@@ -218,6 +218,7 @@ CSRF_COOKIE_HTTPONLY = False
 CSRF_USE_SESSIONS = False
 CSRF_TRUSTED_ORIGINS = [
     "https://api.cache.co.ke",
+    "https://Apicachecoke-env.eba-m4ujm97b.eu-north-1.elasticbeanstalk.com",
     "https://martt.cache.co.ke",
     "http://localhost:3000",
     "http://127.0.0.1:8000",
