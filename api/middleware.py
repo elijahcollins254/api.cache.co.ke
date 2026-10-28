@@ -1,7 +1,21 @@
 """
 Custom middleware for handling CSRF and other API-specific logic.
 """
+from django.http import HttpResponse
 from django.middleware.csrf import CsrfViewMiddleware
+
+
+class HealthCheckMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if (
+            request.path == '/health/'
+            and request.META.get('HTTP_USER_AGENT', '').startswith('ELB-HealthChecker')
+        ):
+            return HttpResponse('ok')
+        return self.get_response(request)
 
 
 class DisableCSRFForApiMiddleware(CsrfViewMiddleware):
