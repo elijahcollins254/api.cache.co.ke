@@ -35,7 +35,24 @@ DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
 # Check if we're in Vercel build mode
 VERCEL_BUILD = os.getenv('VERCEL_BUILD') == '1'
 
-ALLOWED_HOSTS = ['www.cache.co.ke', "martt.cache.co.ke", 'api.cache.co.ke', '.elasticbeanstalk.com', '127.0.0.1', 'localhost', '.vercel.app', 'cache.kibeezy.com', 'cache.co.ke', 'rain.cache.co.ke', '8000-firebase-wild-wash-apigit-1760697854679.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev', '3000-firebase-cachegit-1760698481871.cluster-ikslh4rdsnbqsvu5nw3v4dqjj2.cloudworkstations.dev', "mart.cache.co.ke",]
+ALLOWED_HOSTS = [
+    'www.cache.co.ke',
+    'martt.cache.co.ke',
+    'api.cache.co.ke',
+    'Apicachecoke-env.eba-m4ujm97b.eu-north-1.elasticbeanstalk.com',
+    'awseb--AWSEB-QJ73e54ZgJXX-1346613488.eu-north-1.elb.amazonaws.com',
+    '.elasticbeanstalk.com',
+    '.eu-north-1.compute.internal',
+    '127.0.0.1',
+    'localhost',
+    '.vercel.app',
+    'cache.kibeezy.com',
+    'cache.co.ke',
+    'rain.cache.co.ke',
+    '8000-firebase-wild-wash-apigit-1760697854679.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev',
+    '3000-firebase-cachegit-1760698481871.cluster-ikslh4rdsnbqsvu5nw3v4dqjj2.cloudworkstations.dev',
+    'mart.cache.co.ke',
+]
 
 
 # Application definition
