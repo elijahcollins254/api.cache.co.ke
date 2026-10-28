@@ -17,10 +17,26 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         default_path = Path(settings.BASE_DIR).parent / 'carefour-scrape' / 'products.json'
+        default_category_pages_path = default_path.with_name('categories.json')
         parser.add_argument('--file', default=str(default_path))
+        parser.add_argument('--category-pages-file', default=str(default_category_pages_path))
+        parser.add_argument(
+            '--initial-stock',
+            type=int,
+            default=0,
+            help='Stock quantity to set on newly imported products (default: 0).',
+        )
+        parser.add_argument(
+            '--overwrite-inventory',
+            action='store_true',
+            help='Also set stock and active status on existing matching products.',
+        )
         parser.add_argument('--dry-run', action='store_true')
 
     def handle(self, *args, **options):
+        if options['initial_stock'] < 0:
+            raise CommandError('--initial-stock cannot be negative.')
+
         try:
             with open(options['file'], encoding='utf-8') as catalog_file:
                 rows = json.load(catalog_file)
@@ -41,11 +57,18 @@ class Command(BaseCommand):
         if not products:
             raise CommandError('No valid products found in catalog JSON.')
 
+        departments = self.load_departments(
+            options['category_pages_file'],
+            {product['category'] for product in products.values()},
+        )
+        for product in products.values():
+            product['department'] = departments[product['category']]
+
         shop = Shop.objects.filter(slug='cache-mart').first()
         if shop is None:
             raise CommandError('The Cache Mart shop (slug: cache-mart) does not exist.')
 
-        categories = {product['category'] for product in products.values()}
+        categories = {product['department'] for product in products.values()}
         product_slugs = {product['slug'] for product in products.values()}
         existing_products = set(
             Product.objects.filter(shop=shop, slug__in=product_slugs).values_list('slug', flat=True)
@@ -55,7 +78,9 @@ class Command(BaseCommand):
 
         if options['dry_run']:
             self.stdout.write(
-                f'Dry run: {len(products)} unique products, {len(categories)} categories, '
+                f'Dry run: {len(products)} unique products, '
+                f'{len({product["category"] for product in products.values()})} scraped labels mapped to '
+                f'{len(categories)} departments, '
                 f'{new_count} new products, {update_count} updates.'
             )
             return
@@ -82,12 +107,12 @@ class Command(BaseCommand):
             product_rows = [
                 Product(
                     shop=shop,
-                    category=category_rows[product['category']],
+                    category=category_rows[product['department']],
                     name=product['name'],
                     slug=product['slug'],
                     price=product['price'],
                     image_url=product['image_url'],
-                    stock_quantity=0,
+                    stock_quantity=options['initial_stock'],
                     is_active=True,
                 )
                 for product in products.values()
@@ -96,7 +121,17 @@ class Command(BaseCommand):
                 product_rows,
                 batch_size=200,
                 update_conflicts=True,
-                update_fields=['category', 'name', 'price', 'image_url'],
+                update_fields=[
+                    'category',
+                    'name',
+                    'price',
+                    'image_url',
+                    *(
+                        ['stock_quantity', 'is_active']
+                        if options['overwrite_inventory']
+                        else []
+                    ),
+                ],
                 unique_fields=['shop', 'slug'],
             )
 
@@ -111,6 +146,61 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(
                 'The Cache Mart shop is not publicly visible until it is active and verified.'
             ))
+
+    @staticmethod
+    def load_departments(category_pages_file, category_names):
+        try:
+            with open(category_pages_file, encoding='utf-8') as category_file:
+                category_pages = json.load(category_file)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CommandError(f'Could not read category pages JSON: {exc}') from exc
+
+        if not isinstance(category_pages, list):
+            raise CommandError('Category pages JSON must contain a list.')
+
+        roots = {}
+        category_scores = {}
+        for page in category_pages:
+            if not isinstance(page, dict) or page.get('status') != 'ok':
+                continue
+
+            code = urlparse(str(page.get('url', ''))).path.rstrip('/').rsplit('/', 1)[-1]
+            match = re.fullmatch(r'([A-Za-z]+)(\d+)', code)
+            name = ' '.join(str(page.get('name', '')).split())
+            product_count = page.get('product_count', 0)
+            if (
+                match is None
+                or not name
+                or not isinstance(product_count, int)
+                or isinstance(product_count, bool)
+                or product_count <= 0
+            ):
+                continue
+
+            prefix, digits = match.groups()
+            family = prefix + digits[:2]
+            if not digits[2:].strip('0') and name != code:
+                current_root = roots.get(family)
+                if current_root is None or product_count > current_root[1]:
+                    roots[family] = (name, product_count)
+
+            score_key = (name, family)
+            category_scores[score_key] = category_scores.get(score_key, 0) + product_count
+
+        departments = {}
+        for name in category_names:
+            candidates = [
+                (family, score)
+                for (category_name, family), score in category_scores.items()
+                if category_name == name and family in roots
+            ]
+            if not candidates:
+                raise CommandError(
+                    f'Could not map scraped category "{name}" to a Carrefour department.'
+                )
+            family, _ = min(candidates, key=lambda item: (-item[1], item[0]))
+            departments[name] = roots[family][0]
+        return departments
 
     @staticmethod
     def normalize_row(row):

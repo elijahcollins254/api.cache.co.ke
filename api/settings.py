@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 from pathlib import Path
 
 import os
+import environ
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -24,16 +26,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-=cldztbc4jg&xl0!x673!*v2_=p$$eu)=7*f#d0#zs$44xx-h^'
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    raise ImproperlyConfigured('Set DJANGO_SECRET_KEY in the environment.')
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
 # Check if we're in Vercel build mode
 VERCEL_BUILD = os.getenv('VERCEL_BUILD') == '1'
 
-ALLOWED_HOSTS = ['https://www.cache.co.ke',"martt.cache.co.ke",'api.cache.co.ke', '127.0.0.1', 'localhost', '.vercel.app', 'cache.kibeezy.com', 'cache.co.ke', 'rain.cache.co.ke', '8000-firebase-wild-wash-apigit-1760697854679.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev', '3000-firebase-cachegit-1760698481871.cluster-ikslh4rdsnbqsvu5nw3v4dqjj2.cloudworkstations.dev', "mart.cache.co.ke",]
+ALLOWED_HOSTS = ['www.cache.co.ke', "martt.cache.co.ke", 'api.cache.co.ke', '.elasticbeanstalk.com', '127.0.0.1', 'localhost', '.vercel.app', 'cache.kibeezy.com', 'cache.co.ke', 'rain.cache.co.ke', '8000-firebase-wild-wash-apigit-1760697854679.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev', '3000-firebase-cachegit-1760698481871.cluster-ikslh4rdsnbqsvu5nw3v4dqjj2.cloudworkstations.dev', "mart.cache.co.ke",]
 
 
 # Application definition
@@ -119,16 +121,20 @@ REST_FRAMEWORK = {
 # environments like Vercel. You can use a database over HTTP, hosted elsewhere.
 
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME'),
-        'USER': os.getenv('DB_USER'),
-        'PASSWORD': os.getenv('DB_PASSWORD'),
-        'HOST': os.getenv('DB_HOST'),
-        'PORT': os.getenv('DB_PORT'),
+DATABASE_URL = os.getenv('DATABASE_URL')
+if DATABASE_URL:
+    DATABASES = {'default': environ.Env.db_url_config(DATABASE_URL)}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('DB_NAME'),
+            'USER': os.getenv('DB_USER'),
+            'PASSWORD': os.getenv('DB_PASSWORD'),
+            'HOST': os.getenv('DB_HOST'),
+            'PORT': os.getenv('DB_PORT'),
+        }
     }
-}
 
 
 
@@ -268,4 +274,3 @@ AFRICAS_TALKING_API_KEY = os.getenv('AFRICAS_TALKING_API_KEY', '')
 AFRICAS_TALKING_USERNAME = os.getenv('AFRICAS_TALKING_USERNAME', 'sandbox')
 AFRICAS_TALKING_SENDER_ID = os.getenv('AFRICAS_TALKING_SENDER_ID', 'cache')
 ADMIN_PHONE_NUMBER = os.getenv('ADMIN_PHONE_NUMBER', '+254712345678')  # Default admin phone, update in .env
-

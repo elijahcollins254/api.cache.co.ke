@@ -1,7 +1,13 @@
+import json
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 from django.test import TestCase
 from django.test import RequestFactory
 from django.contrib import admin
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.core.exceptions import ValidationError
 from rest_framework.test import APIClient
 
@@ -96,6 +102,81 @@ class MarketplaceModelsTest(TestCase):
     def test_shop_category_slug_is_generated_from_name(self):
         category = ShopCategory.objects.create(name='Home & Living')
         self.assertEqual(category.slug, 'home-living')
+
+    def test_carrefour_import_maps_department_and_sets_initial_stock(self):
+        shop = Shop.objects.create(
+            owner=self.merchant,
+            name='Cache Mart',
+            slug='cache-mart',
+            status='active',
+            is_verified=True,
+        )
+        product_rows = [{
+            'source_id': 'test-123',
+            'name': 'Baby Detergent',
+            'category': 'Baby Detergent',
+            'price': '250.00',
+            'image_url': 'https://cdn.mafrservices.com/pim-content/KEN/media/product/test.jpg',
+        }]
+        category_pages = [
+            {
+                'url': 'https://www.carrefour.ke/mafken/en/c/FKEN1000000',
+                'name': 'Baby Products',
+                'product_count': 60,
+                'status': 'ok',
+            },
+            {
+                'url': 'https://www.carrefour.ke/mafken/en/c/FKEN1020100',
+                'name': 'Baby Detergent',
+                'product_count': 4,
+                'status': 'ok',
+            },
+        ]
+
+        with TemporaryDirectory() as directory:
+            products_file = Path(directory) / 'products.json'
+            categories_file = Path(directory) / 'categories.json'
+            products_file.write_text(json.dumps(product_rows), encoding='utf-8')
+            categories_file.write_text(json.dumps(category_pages), encoding='utf-8')
+
+            call_command(
+                'import_carrefour_catalog',
+                file=str(products_file),
+                category_pages_file=str(categories_file),
+                initial_stock=100,
+                stdout=StringIO(),
+            )
+
+            product = Product.objects.get(shop=shop, slug='baby-detergent-test-123')
+            self.assertEqual(product.category.name, 'Baby Products')
+            self.assertEqual(product.stock_quantity, 100)
+            self.assertTrue(product.is_active)
+            self.assertEqual(product.image_url, product_rows[0]['image_url'])
+
+            product.stock_quantity = 12
+            product.save(update_fields=['stock_quantity'])
+            call_command(
+                'import_carrefour_catalog',
+                file=str(products_file),
+                category_pages_file=str(categories_file),
+                initial_stock=100,
+                stdout=StringIO(),
+            )
+            product.refresh_from_db()
+            self.assertEqual(product.stock_quantity, 12)
+            self.assertTrue(product.is_active)
+
+            call_command(
+                'import_carrefour_catalog',
+                file=str(products_file),
+                category_pages_file=str(categories_file),
+                initial_stock=100,
+                overwrite_inventory=True,
+                stdout=StringIO(),
+            )
+            product.refresh_from_db()
+            self.assertEqual(product.stock_quantity, 100)
+            self.assertTrue(product.is_active)
 
     def test_service_migration_moves_every_service_to_cache_liqour(self):
         from importlib import import_module
