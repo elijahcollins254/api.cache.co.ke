@@ -35,7 +35,14 @@ DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
 # Check if we're in Vercel build mode
 VERCEL_BUILD = os.getenv('VERCEL_BUILD') == '1'
 
-ALLOWED_HOSTS = [
+
+def _split_env_list(value):
+    if not value:
+        return []
+    return [item.strip() for item in value.replace(';', ',').split(',') if item.strip()]
+
+
+DEFAULT_ALLOWED_HOSTS = [
     'www.cache.co.ke',
     'martt.cache.co.ke',
     'api.cache.co.ke',
@@ -52,7 +59,10 @@ ALLOWED_HOSTS = [
     '8000-firebase-wild-wash-apigit-1760697854679.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev',
     '3000-firebase-cachegit-1760698481871.cluster-ikslh4rdsnbqsvu5nw3v4dqjj2.cloudworkstations.dev',
     'mart.cache.co.ke',
+    '.cache.co.ke',
 ]
+
+ALLOWED_HOSTS = list(dict.fromkeys(_split_env_list(os.getenv('ALLOWED_HOSTS')) + DEFAULT_ALLOWED_HOSTS))
 
 
 # Application definition
