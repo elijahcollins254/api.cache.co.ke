@@ -71,6 +71,8 @@ DEFAULT_ALLOWED_HOSTS = [
     'api.cache.co.ke',
     'Apicachecoke-env.eba-m4ujm97b.eu-north-1.elasticbeanstalk.com',
     'awseb--AWSEB-QJ73e54ZgJXX-1346613488.eu-north-1.elb.amazonaws.com',
+    'ec2-13-60-141-116.eu-north-1.compute.amazonaws.com',
+    'bravofly.com',
     '.elasticbeanstalk.com',
     '.eu-north-1.compute.internal',
     '127.0.0.1',
