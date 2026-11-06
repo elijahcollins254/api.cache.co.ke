@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 
 from pathlib import Path
+from urllib.parse import urlparse
 
 import os
 import environ
@@ -36,10 +37,32 @@ DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
 VERCEL_BUILD = os.getenv('VERCEL_BUILD') == '1'
 
 
+def _normalize_host(value):
+    if not value:
+        return ''
+    host = value.strip()
+    if not host:
+        return ''
+    if '://' in host:
+        parsed = urlparse(host)
+        host = parsed.netloc or parsed.path
+    host = host.split('/')[0]
+    if host.startswith('[') and ']' in host:
+        host = host[1:host.index(']')]
+    if ':' in host and host.count(':') == 1 and host.rsplit(':', 1)[1].isdigit():
+        host = host.rsplit(':', 1)[0]
+    return host.strip()
+
+
 def _split_env_list(value):
     if not value:
         return []
-    return [item.strip() for item in value.replace(';', ',').split(',') if item.strip()]
+    hosts = []
+    for item in value.replace(';', ',').split(','):
+        cleaned = _normalize_host(item)
+        if cleaned:
+            hosts.append(cleaned)
+    return hosts
 
 
 DEFAULT_ALLOWED_HOSTS = [
@@ -293,7 +316,10 @@ MPESA_B2C_INITIATOR_NAME = os.getenv('MPESA_B2C_INITIATOR_NAME', '')
 MPESA_B2C_SECURITY_CREDENTIAL = os.getenv('MPESA_B2C_SECURITY_CREDENTIAL', '')
 MPESA_B2C_COMMAND_ID = os.getenv('MPESA_B2C_COMMAND_ID', 'BusinessPayment')
 MPESA_B2C_RESULT_URL = os.getenv('MPESA_B2C_RESULT_URL', '')
-MPESA_B2C_QUEUE_TIMEOUT_URL = os.getenv('MPESA_B2C_QUEUE_TIMEOUT_URL', '')
+# Safaricom uses QueueTimeOutURL; support both the historical queue naming and the
+# more common timeout naming used in docs and examples.
+MPESA_B2C_TIMEOUT_URL = os.getenv('MPESA_B2C_TIMEOUT_URL', '') or os.getenv('MPESA_B2C_QUEUE_TIMEOUT_URL', '')
+MPESA_B2C_QUEUE_TIMEOUT_URL = os.getenv('MPESA_B2C_QUEUE_TIMEOUT_URL', '') or MPESA_B2C_TIMEOUT_URL
 MPESA_B2C_CALLBACK_TOKEN = os.getenv('MPESA_B2C_CALLBACK_TOKEN', '')
 RIDER_DELIVERY_EARNING_AMOUNT = os.getenv('RIDER_DELIVERY_EARNING_AMOUNT', '50.00')
 RIDER_MIN_WITHDRAWAL_AMOUNT = os.getenv('RIDER_MIN_WITHDRAWAL_AMOUNT', '50.00')
