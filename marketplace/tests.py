@@ -99,6 +99,31 @@ class MarketplaceModelsTest(TestCase):
         self.assertIn(activate_products, ProductAdmin.actions)
         self.assertIn(deactivate_products, ProductAdmin.actions)
 
+    def test_product_category_admin_displays_product_counts(self):
+        shop = Shop.objects.create(
+            owner=self.merchant,
+            name='Fresh Basket Shop',
+            slug='fresh-basket-shop',
+        )
+        category = ProductCategory.objects.create(name='Produce', slug='produce')
+        other_category = ProductCategory.objects.create(name='Dairy', slug='dairy')
+        Product.objects.create(shop=shop, category=category, name='Tomatoes', price='100.00')
+        Product.objects.create(
+            shop=shop,
+            category=category,
+            name='Avocado',
+            price='120.00',
+            is_active=False,
+        )
+        Product.objects.create(shop=shop, category=other_category, name='Milk', price='80.00')
+
+        product_category_admin = ProductCategoryAdmin(ProductCategory, admin.site)
+        categories = product_category_admin.get_queryset(RequestFactory().get('/admin/'))
+
+        self.assertIn('product_count', ProductCategoryAdmin.list_display)
+        self.assertEqual(product_category_admin.product_count(categories.get(pk=category.pk)), 2)
+        self.assertEqual(product_category_admin.product_count(categories.get(pk=other_category.pk)), 1)
+
     def test_shop_category_slug_is_generated_from_name(self):
         category = ShopCategory.objects.create(name='Home & Living')
         self.assertEqual(category.slug, 'home-living')

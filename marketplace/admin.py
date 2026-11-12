@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.db.models import Count
 
 from .models import MerchantProfile, Product, ProductCategory, Shop, ShopCategory
 
@@ -35,11 +36,18 @@ class ShopCategoryAdmin(admin.ModelAdmin):
 
 @admin.register(ProductCategory)
 class ProductCategoryAdmin(admin.ModelAdmin):
-    list_display = ('name', 'slug', 'is_active', 'featured_on_homepage', 'created_at')
+    list_display = ('name', 'slug', 'product_count', 'is_active', 'featured_on_homepage', 'created_at')
     list_filter = ('is_active', 'featured_on_homepage')
     search_fields = ('name', 'description')
     prepopulated_fields = {'slug': ('name',)}
     actions = [deactivate_product_categories]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(product_count=Count('products'))
+
+    @admin.display(description='Products', ordering='product_count')
+    def product_count(self, obj):
+        return obj.product_count
 
     def save_model(self, request, obj, form, change):
         if obj.featured_on_homepage:
