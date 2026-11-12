@@ -368,7 +368,9 @@ class ShopViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def products(self, request, slug=None):
         shop = self.get_object()
-        products = Product.objects.filter(shop=shop, is_active=True)
+        products = Product.objects.filter(shop=shop, is_active=True).filter(
+            Q(category__isnull=True) | Q(category__is_active=True)
+        )
         serializer = ProductSerializer(products, many=True, context={'request': request})
         return Response(serializer.data)
 
@@ -387,7 +389,10 @@ class ProductViewSet(viewsets.ModelViewSet):
         if shop_slug:
             qs = qs.filter(shop__slug=shop_slug)
         if self.action in ['list', 'retrieve']:
-            qs = qs.filter(shop__is_verified=True, shop__status='active')
+            qs = qs.filter(
+                shop__is_verified=True,
+                shop__status='active',
+            ).filter(Q(category__isnull=True) | Q(category__is_active=True))
             return qs.distinct()
         if self.request.user.is_authenticated:
             merchant = MerchantProfile.objects.filter(user=self.request.user).first()

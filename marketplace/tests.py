@@ -395,6 +395,71 @@ class MarketplaceAPITest(TestCase):
         self.assertEqual(self.client.get(f'/marketplace/products/{hidden_product.id}/').status_code, 404)
         self.assertNotEqual(visible_product.id, hidden_product.id)
 
+    def test_public_product_endpoints_hide_products_in_inactive_categories(self):
+        merchant = MerchantProfile.objects.create(
+            user=self.user,
+            merchant_username='freshbasket',
+            business_name='Fresh Basket',
+            phone='+254712345678',
+        )
+        shop = Shop.objects.create(
+            owner=merchant,
+            name='Fresh Basket Shop',
+            slug='fresh-basket-shop',
+            is_verified=True,
+            status='active',
+        )
+        active_category = ProductCategory.objects.create(name='Produce', slug='produce')
+        inactive_category = ProductCategory.objects.create(
+            name='Hidden Products',
+            slug='hidden-products',
+            is_active=False,
+        )
+        visible_product = Product.objects.create(
+            shop=shop,
+            category=active_category,
+            name='Visible Product',
+            price='100.00',
+        )
+        hidden_product = Product.objects.create(
+            shop=shop,
+            category=inactive_category,
+            name='Hidden Product',
+            price='50.00',
+        )
+        uncategorized_product = Product.objects.create(
+            shop=shop,
+            name='Uncategorized Product',
+            price='25.00',
+        )
+
+        products_response = self.client.get('/marketplace/products/')
+        self.assertEqual(products_response.status_code, 200)
+        self.assertEqual(
+            {item['name'] for item in products_response.data},
+            {'Visible Product', 'Uncategorized Product'},
+        )
+        self.assertEqual(
+            self.client.get(f'/marketplace/products/{hidden_product.id}/').status_code,
+            404,
+        )
+
+        shop_products_response = self.client.get('/marketplace/shops/fresh-basket-shop/products/')
+        self.assertEqual(shop_products_response.status_code, 200)
+        self.assertEqual(
+            {item['name'] for item in shop_products_response.data},
+            {'Visible Product', 'Uncategorized Product'},
+        )
+
+        catalog_response = self.client.get('/services/catalog/')
+        self.assertEqual(catalog_response.status_code, 200)
+        self.assertEqual(
+            {item['name'] for item in catalog_response.data},
+            {'Visible Product', 'Uncategorized Product'},
+        )
+        self.assertNotEqual(visible_product.id, hidden_product.id)
+        self.assertNotEqual(uncategorized_product.id, hidden_product.id)
+
     def test_merchant_directory_hides_unverified_profiles(self):
         MerchantProfile.objects.create(
             user=self.user,

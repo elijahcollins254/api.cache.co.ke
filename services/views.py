@@ -58,7 +58,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='catalog')
     def catalog(self, request):
         services = self.get_queryset().filter(is_active=True)
-        products = Product.objects.filter(is_active=True).select_related(
+        products = Product.objects.filter(is_active=True).filter(
+            Q(category__isnull=True) | Q(category__is_active=True)
+        ).select_related(
             'shop', 'shop__category', 'shop__owner', 'shop__owner__user'
         )
         shop_slug = request.query_params.get('shop')
